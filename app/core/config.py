@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
 
-    # Database
+    # Database USING Local Postgres on Laptop
     DATABASE_URL: str = "postgresql+asyncpg://postgres:9102@localhost:5432/sp_project"
 
     # JWT Security
