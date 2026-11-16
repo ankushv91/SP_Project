@@ -58,3 +58,5 @@ htmlcov/
 # Antigravity & Agent workspace artifacts
 .agents/
 .gemini/
+
+docs/
