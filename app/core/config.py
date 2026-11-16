@@ -6,11 +6,10 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
 
-    # Database USING Local Postgres on Laptop
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:9102@localhost:5432/sp_project"
+    DATABASE_URL: str
 
     # JWT Security
-    SECRET_KEY: str = "your-super-secret-key-change-in-production-sp-project"
+    SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
