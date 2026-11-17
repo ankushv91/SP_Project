@@ -45,3 +45,21 @@ docker compose down
 
 The named database volume is retained, so data is preserved when the containers
 are stopped. To remove the database data as well, run `docker compose down -v`.
+
+## Load the JWT signing secret from AWS Secrets Manager
+
+Create a secret in AWS Secrets Manager with the name configured by
+`AWS_SECRET_NAME` (default: `sp-project/jwt-secret`). Store the JWT signing key
+as the secret's plain-text value (`SecretString`), not as JSON; use at least 32
+bytes of random key material for the default HS256 algorithm. In the AWS
+console, open **Secrets Manager**, choose **Store a new secret** → **Other type
+of secret**, enter the key as plain text, and set the secret name. Set
+`AWS_REGION` to the region containing the secret. When the API starts, it
+retrieves this value using the AWS SDK credential chain; do not put AWS
+credentials or the JWT secret in the application environment.
+
+Grant the API's AWS execution role permission to call
+`secretsmanager:GetSecretValue` for that secret. For local or Compose runs,
+configure AWS credentials using a supported AWS SDK credential provider. The
+API fails to start if the secret cannot be retrieved or has no non-empty
+`SecretString`.

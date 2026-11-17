@@ -5,6 +5,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.core.config import settings
 from app.core.database import Base, get_db
 main_module = importlib.import_module("app.main")
 
@@ -12,10 +13,24 @@ app = main_module.app
 
 
 @pytest.fixture
-async def client():
+async def client(monkeypatch):
+    monkeypatch.setattr(settings, "SECRET_KEY", "")
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
+    monkeypatch.setattr(main_module, "engine", engine)
+
+    class FakeSecretsManager:
+        def get_secret_value(self, *, SecretId):
+            assert SecretId == settings.AWS_SECRET_NAME
+            return {"SecretString": "runtime-test-secret-that-is-long-enough"}
+
+    def fake_boto3_client(service_name, **kwargs):
+        assert service_name == "secretsmanager"
+        assert kwargs == (
+            {"region_name": settings.AWS_REGION} if settings.AWS_REGION else {}
+        )
+        return FakeSecretsManager()
+
+    monkeypatch.setattr(main_module.boto3, "client", fake_boto3_client)
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -25,11 +40,12 @@ async def client():
 
     app.dependency_overrides[get_db] = override_get_db
     try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app),
-            base_url="http://test",
-        ) as test_client:
-            yield test_client
+        async with main_module.lifespan(app):
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+            ) as test_client:
+                yield test_client
     finally:
         app.dependency_overrides.pop(get_db, None)
         await engine.dispose()
@@ -234,8 +250,22 @@ async def test_lifespan_creates_tables(monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     monkeypatch.setattr(main_module, "engine", engine)
 
+    class FakeSecretsManager:
+        def get_secret_value(self, *, SecretId):
+            assert SecretId == settings.AWS_SECRET_NAME
+            return {"SecretString": "runtime-test-secret-that-is-long-enough"}
+
+    def fake_boto3_client(service_name, **kwargs):
+        assert service_name == "secretsmanager"
+        assert kwargs == (
+            {"region_name": settings.AWS_REGION} if settings.AWS_REGION else {}
+        )
+        return FakeSecretsManager()
+
+    monkeypatch.setattr(main_module.boto3, "client", fake_boto3_client)
     try:
         async with main_module.lifespan(app):
+            assert settings.SECRET_KEY == "runtime-test-secret-that-is-long-enough"
             async with engine.connect() as connection:
                 tables = await connection.run_sync(
                     lambda sync_connection: set(
@@ -245,3 +275,18 @@ async def test_lifespan_creates_tables(monkeypatch):
             assert {"todos", "users"} <= tables
     finally:
         await engine.dispose()
+
+
+def test_fetch_jwt_secret_rejects_missing_secret_string(monkeypatch):
+    class FakeSecretsManager:
+        def get_secret_value(self, *, SecretId):
+            return {}
+
+    monkeypatch.setattr(
+        main_module.boto3,
+        "client",
+        lambda service_name, **kwargs: FakeSecretsManager(),
+    )
+
+    with pytest.raises(RuntimeError, match="non-empty SecretString"):
+        main_module.fetch_jwt_secret()
