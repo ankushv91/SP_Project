@@ -1,5 +1,5 @@
 import logging
-import smtplib
+import aiosmtplib
 from email.message import EmailMessage
 
 from app.core.config import settings
@@ -13,7 +13,7 @@ class EmailSender:
         self.port = port
         self.from_email = from_email
 
-    def send_todo_created_notification(
+    async def send_todo_created_notification(
         self, todo_id: int, title: str, recipient: str
     ) -> None:
         message = EmailMessage()
@@ -23,9 +23,13 @@ class EmailSender:
         message.set_content(f'The todo "{title}" (ID: {todo_id}) was created.')
 
         try:
-            with smtplib.SMTP(self.host, self.port, timeout=10) as smtp:
-                smtp.send_message(message)
-        except (OSError, smtplib.SMTPException):
+            await aiosmtplib.send(
+                message,
+                hostname=self.host,
+                port=self.port,
+                timeout=10,
+            )
+        except (OSError, aiosmtplib.SMTPException):
             logger.exception(
                 "Failed to send todo creation email for todo_id=%s", todo_id
             )
@@ -34,10 +38,10 @@ class EmailSender:
         logger.info("Sent todo creation email for todo_id=%s", todo_id)
 
 
-def send_todo_created_email(todo_id: int, title: str, recipient: str) -> None:
+async def send_todo_created_email(todo_id: int, title: str, recipient: str) -> None:
     sender = EmailSender(
         host=settings.SMTP_HOST,
         port=settings.SMTP_PORT,
         from_email=settings.SMTP_FROM_EMAIL,
     )
-    sender.send_todo_created_notification(todo_id, title, recipient)
+    await sender.send_todo_created_notification(todo_id, title, recipient)

@@ -1,5 +1,6 @@
 import importlib
 import logging
+from unittest.mock import AsyncMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import settings
 from app.core.database import Base, get_db
+from app.core.security import _get_secret_key, set_jwt_secret
 from app.domains.todos import router as todo_router
 
 main_module = importlib.import_module("app.main")
@@ -17,8 +19,8 @@ app = main_module.app
 
 @pytest.fixture
 async def client(monkeypatch):
-    monkeypatch.setattr(settings, "SECRET_KEY", "")
-    monkeypatch.setattr(todo_router, "send_todo_created_email", lambda *args: None)
+    set_jwt_secret("")
+    monkeypatch.setattr(todo_router, "send_todo_created_email", AsyncMock())
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     monkeypatch.setattr(main_module, "engine", engine)
 
@@ -70,21 +72,17 @@ async def test_create_todo(client):
 
 @pytest.mark.asyncio
 async def test_create_todo_queues_email_after_saving(client, monkeypatch, caplog):
-    queued_emails = []
-    monkeypatch.setattr(
-        todo_router,
-        "send_todo_created_email",
-        lambda *args: queued_emails.append(args),
-    )
+    send_notification = AsyncMock()
+    monkeypatch.setattr(todo_router, "send_todo_created_email", send_notification)
     caplog.set_level(logging.INFO, logger="app.domains.todos.router")
 
     response = await client.post("/todos", json={"title": "Notify me"})
 
     assert response.status_code == 201
     todo = response.json()
-    assert queued_emails == [
-        (todo["id"], "Notify me", settings.TODO_NOTIFICATION_EMAIL)
-    ]
+    send_notification.assert_awaited_once_with(
+        todo["id"], "Notify me", settings.TODO_NOTIFICATION_EMAIL
+    )
     assert (
         f"Queued todo creation email notification for todo_id={todo['id']}"
         in caplog.text
@@ -292,7 +290,7 @@ async def test_lifespan_creates_tables(monkeypatch):
     monkeypatch.setattr(main_module.boto3, "client", fake_boto3_client)
     try:
         async with main_module.lifespan(app):
-            assert settings.SECRET_KEY == "runtime-test-secret-that-is-long-enough"
+            assert _get_secret_key() == "runtime-test-secret-that-is-long-enough"
             async with engine.connect() as connection:
                 tables = await connection.run_sync(
                     lambda sync_connection: set(

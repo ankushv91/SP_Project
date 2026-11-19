@@ -1,11 +1,13 @@
 from contextlib import asynccontextmanager
 import boto3
 from fastapi import FastAPI, Depends
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.database import get_db, engine, Base
+from app.core.security import set_jwt_secret
 from app.domains.users.router import router as auth_router
 from app.domains.todos.router import router as todo_router
 
@@ -26,7 +28,7 @@ def fetch_jwt_secret() -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings.SECRET_KEY = fetch_jwt_secret()
+    set_jwt_secret(await run_in_threadpool(fetch_jwt_secret))
     # Auto-create tables on startup
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

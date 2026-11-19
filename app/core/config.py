@@ -16,8 +16,6 @@ class Settings(BaseSettings):
     AWS_SECRET_NAME: str = "sp-project/jwt-secret"
     AWS_REGION: str | None = None
 
-    # Populated from AWS Secrets Manager during application startup.
-    SECRET_KEY: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 

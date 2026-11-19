@@ -7,6 +7,12 @@ from app.core.config import settings
 
 # Password hashing instance (Argon2)
 password_hash = PasswordHash((Argon2Hasher(),))
+_jwt_secret_key = ""
+
+
+def set_jwt_secret(secret: str) -> None:
+    global _jwt_secret_key
+    _jwt_secret_key = secret
 
 def hash_password(password: str) -> str:
     return password_hash.hash(password)
@@ -15,9 +21,9 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return password_hash.verify(plain_password, hashed_password)
 
 def _get_secret_key() -> str:
-    if not settings.SECRET_KEY:
+    if not _jwt_secret_key:
         raise RuntimeError("JWT secret has not been loaded from AWS Secrets Manager")
-    return settings.SECRET_KEY
+    return _jwt_secret_key
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
