@@ -8,6 +8,11 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str
 
+    SMTP_HOST: str = "localhost"
+    SMTP_PORT: int = 1025
+    SMTP_FROM_EMAIL: str = "no-reply@example.com"
+    TODO_NOTIFICATION_EMAIL: str = "todo-notifications@example.com"
+
     AWS_SECRET_NAME: str = "sp-project/jwt-secret"
     AWS_REGION: str | None = None
 

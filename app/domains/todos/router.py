@@ -1,16 +1,33 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+import logging
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 
 from app.core.database import get_db
+from app.core.config import settings
+from app.core.email import send_todo_created_email
 from app.domains.todos.schemas import TodoCreate, TodoUpdate, TodoResponse
 from app.domains.todos import service as todo_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/todos", tags=["Todos"])
 
 @router.post("", response_model=TodoResponse, status_code=status.HTTP_201_CREATED)
-async def create_todo(payload: TodoCreate, db: AsyncSession = Depends(get_db)):
-    return await todo_service.create_todo(db, payload)
+async def create_todo(
+    payload: TodoCreate,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    todo = await todo_service.create_todo(db, payload)
+    background_tasks.add_task(
+        send_todo_created_email,
+        todo.id,
+        todo.title,
+        settings.TODO_NOTIFICATION_EMAIL,
+    )
+    logger.info("Queued todo creation email notification for todo_id=%s", todo.id)
+    return todo
 
 @router.get("", response_model=List[TodoResponse])
 async def list_todos(

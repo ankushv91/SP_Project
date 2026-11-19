@@ -37,6 +37,16 @@ The response should report `"status": "success"`. The API is also available at
 `http://localhost:8000/docs`. To inspect service logs, run
 `docker compose logs -f api db`.
 
+## Inspect Todo notification emails
+
+Creating a Todo schedules a notification to `TODO_NOTIFICATION_EMAIL` after
+the Todo has been saved. The local Compose stack uses MailHog as a dummy SMTP
+server, so no real email is sent. Configure `SMTP_FROM_EMAIL` and
+`TODO_NOTIFICATION_EMAIL` in `.env` if needed, then create a Todo through
+`POST /todos`. The API log records when the notification is queued and sent;
+SMTP delivery errors are logged with the Todo ID. View captured messages at
+`http://localhost:8025` (or the port configured by `MAILHOG_UI_PORT`).
+
 Stop and remove the containers and network with:
 
 ```powershell
