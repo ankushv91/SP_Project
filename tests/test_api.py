@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import inspect
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
 from app.core.database import Base, get_db
@@ -25,9 +25,9 @@ class InMemoryRedis:
     async def get(self, key):
         return self.values.get(key)
 
-    async def set(self, key, value, ex=None):
+    async def setex(self, key, seconds, value):
         self.values[key] = value
-        self.expirations[key] = ex
+        self.expirations[key] = seconds
 
     def scan_iter(self, match):
         prefix = match.removesuffix("*")
@@ -53,7 +53,10 @@ class InMemoryRedis:
 async def client(monkeypatch):
     set_jwt_secret("")
     monkeypatch.setattr(todo_router, "send_todo_created_email", AsyncMock())
-    monkeypatch.setattr(todo_router, "redis_client", InMemoryRedis())
+    redis_cache = InMemoryRedis()
+    monkeypatch.setattr(
+        todo_router.todo_service, "get_redis_client", lambda: redis_cache
+    )
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     monkeypatch.setattr(main_module, "engine", engine)
 
@@ -159,36 +162,46 @@ async def test_todo_list_cache_reuses_results_and_invalidates_after_mutations(
     client, monkeypatch
 ):
     cache = InMemoryRedis()
-    monkeypatch.setattr(todo_router, "redis_client", cache)
-    original_get_all_todos = todo_router.todo_service.get_all_todos
-    get_all_todos = AsyncMock(wraps=original_get_all_todos)
-    monkeypatch.setattr(todo_router.todo_service, "get_all_todos", get_all_todos)
+    monkeypatch.setattr(todo_router.todo_service, "get_redis_client", lambda: cache)
+    original_execute = AsyncSession.execute
+    execute_count = 0
+
+    async def counted_execute(self, *args, **kwargs):
+        nonlocal execute_count
+        execute_count += 1
+        return await original_execute(self, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncSession, "execute", counted_execute)
 
     assert (await client.get("/todos")).json() == []
+    assert cache.values
     assert (await client.get("/todos")).json() == []
-    assert get_all_todos.await_count == 1
+    assert execute_count == 1
     assert list(cache.expirations.values()) == [60]
 
     created = await client.post("/todos", json={"title": "Cached todo"})
     todo_id = created.json()["id"]
     assert (await client.get("/todos")).json()[0]["id"] == todo_id
-    assert get_all_todos.await_count == 2
+    assert execute_count == 2
 
     updated = await client.put(
         f"/todos/{todo_id}", json={"is_completed": True}
     )
     assert updated.status_code == 200
+    assert execute_count == 3
     completed = await client.get("/todos", params={"completed": True})
     assert [todo["id"] for todo in completed.json()] == [todo_id]
+    assert execute_count == 4
     assert (await client.get("/todos", params={"completed": True})).json() == (
         completed.json()
     )
-    assert get_all_todos.await_count == 3
+    assert execute_count == 4
 
     deleted = await client.delete(f"/todos/{todo_id}")
     assert deleted.status_code == 204
+    assert execute_count == 5
     assert (await client.get("/todos")).json() == []
-    assert get_all_todos.await_count == 4
+    assert execute_count == 6
 
 
 @pytest.mark.asyncio
