@@ -8,6 +8,8 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str
 
+    REDIS_URL: str = "redis://localhost:6379/0"
+
     SMTP_HOST: str = "localhost"
     SMTP_PORT: int = 1025
     SMTP_FROM_EMAIL: str = "no-reply@example.com"

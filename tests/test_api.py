@@ -17,10 +17,43 @@ main_module = importlib.import_module("app.main")
 app = main_module.app
 
 
+class InMemoryRedis:
+    def __init__(self):
+        self.values = {}
+        self.expirations = {}
+
+    async def get(self, key):
+        return self.values.get(key)
+
+    async def set(self, key, value, ex=None):
+        self.values[key] = value
+        self.expirations[key] = ex
+
+    def scan_iter(self, match):
+        prefix = match.removesuffix("*")
+
+        async def matching_keys():
+            for key in list(self.values):
+                if key.startswith(prefix):
+                    yield key
+
+        return matching_keys()
+
+    async def delete(self, *keys):
+        deleted = 0
+        for key in keys:
+            if key in self.values:
+                del self.values[key]
+                self.expirations.pop(key, None)
+                deleted += 1
+        return deleted
+
+
 @pytest.fixture
 async def client(monkeypatch):
     set_jwt_secret("")
     monkeypatch.setattr(todo_router, "send_todo_created_email", AsyncMock())
+    monkeypatch.setattr(todo_router, "redis_client", InMemoryRedis())
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     monkeypatch.setattr(main_module, "engine", engine)
 
@@ -119,6 +152,43 @@ async def test_list_todos_filters_and_paginates(client):
     assert len(
         (await client.get("/todos", params={"skip": 1, "limit": 1})).json()
     ) == 1
+
+
+@pytest.mark.asyncio
+async def test_todo_list_cache_reuses_results_and_invalidates_after_mutations(
+    client, monkeypatch
+):
+    cache = InMemoryRedis()
+    monkeypatch.setattr(todo_router, "redis_client", cache)
+    original_get_all_todos = todo_router.todo_service.get_all_todos
+    get_all_todos = AsyncMock(wraps=original_get_all_todos)
+    monkeypatch.setattr(todo_router.todo_service, "get_all_todos", get_all_todos)
+
+    assert (await client.get("/todos")).json() == []
+    assert (await client.get("/todos")).json() == []
+    assert get_all_todos.await_count == 1
+    assert list(cache.expirations.values()) == [60]
+
+    created = await client.post("/todos", json={"title": "Cached todo"})
+    todo_id = created.json()["id"]
+    assert (await client.get("/todos")).json()[0]["id"] == todo_id
+    assert get_all_todos.await_count == 2
+
+    updated = await client.put(
+        f"/todos/{todo_id}", json={"is_completed": True}
+    )
+    assert updated.status_code == 200
+    completed = await client.get("/todos", params={"completed": True})
+    assert [todo["id"] for todo in completed.json()] == [todo_id]
+    assert (await client.get("/todos", params={"completed": True})).json() == (
+        completed.json()
+    )
+    assert get_all_todos.await_count == 3
+
+    deleted = await client.delete(f"/todos/{todo_id}")
+    assert deleted.status_code == 204
+    assert (await client.get("/todos")).json() == []
+    assert get_all_todos.await_count == 4
 
 
 @pytest.mark.asyncio

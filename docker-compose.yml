@@ -29,6 +29,7 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       DEBUG: ${DEBUG:-false}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sp_project}:${POSTGRES_PASSWORD:-sp_project}@db:5432/${POSTGRES_DB:-sp_project}
+      REDIS_URL: redis://redis:6379/0
       AWS_SECRET_NAME: ${AWS_SECRET_NAME:-sp-project/jwt-secret}
       AWS_REGION: ${AWS_REGION:-us-east-1}
       ALGORITHM: ${ALGORITHM:-HS256}
@@ -42,8 +43,20 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
       mailhog:
         condition: service_started
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   mailhog:
     image: mailhog/mailhog:v1.0.1
