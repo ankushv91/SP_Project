@@ -7,9 +7,14 @@ The test command enforces more than 80% coverage for the `app` package.
 
 ## Run the API, PostgreSQL, and Redis with Docker Compose
 
-Install Docker Desktop (or Docker Engine with the Compose plugin), then optionally
-copy `.env.example` to `.env` and adjust the PostgreSQL credentials. The example
-values are for local development only; use secure secrets for any deployment.
+Install Docker Desktop (or Docker Engine with the Compose plugin). If `.env`
+does not exist, copy `.env.example` to create it; otherwise, preserve your
+existing `.env` and add or update the documentation settings there. Set
+`DOCS_AUTH_USER` and replace the example `DOCS_AUTH_PASSWORD` with a unique,
+random value. For example, generate a password with
+`python -c "import secrets; print(secrets.token_urlsafe(32))"` and put the
+result in `.env`. The example values are for local development only; use secure
+secrets for any deployment.
 
 Start the services from the repository root:
 
@@ -28,15 +33,38 @@ when initializing an empty data volume. Changing these values in `.env` does not
 change credentials in an existing database; update the database roles to match,
 or remove the volume only if you intend to delete its data.
 
+The example password is a placeholder and is rejected by the Nginx container.
+The password is used to create a bcrypt Basic Auth credential file inside that
+container; it is not committed to the repository. For production, provide it
+through your deployment's secret management rather than a checked-in file.
+
 Confirm that the API can query PostgreSQL:
 
 ```powershell
 Invoke-RestMethod http://localhost:8000/health-check
 ```
 
-The response should report `"status": "success"`. The API is also available at
-`http://localhost:8000/docs`. To inspect service logs, run
+The response should report `"status": "success"`. The API is available at
+`http://localhost:8000`; its built-in `/docs`, `/redoc`, and `/openapi.json`
+routes are disabled so they cannot bypass authentication. Open the protected
+Swagger UI at `http://localhost:8081` (or the port configured by `DOCS_PORT`)
+and enter `DOCS_AUTH_USER` and `DOCS_AUTH_PASSWORD` when prompted. To inspect
+service logs, run
 `docker compose logs -f api db`.
+
+The standalone Swagger UI loads the checked-in `openapi.json`. After changing
+API routes or schemas, regenerate it from the application with:
+
+```powershell
+uv sync --dev
+uv run python scripts/generate_openapi.py
+```
+
+Verify the docs proxy by opening it in a private browser window (which should
+prompt for credentials), then enter the configured username and password. A
+request without credentials should receive HTTP 401.
+The docs port is bound to the local machine; use HTTPS and managed secrets if
+you expose documentation beyond localhost.
 
 ## Inspect Todo notification emails
 

@@ -37,7 +37,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.PROJECT_NAME,
     lifespan=lifespan,
-    debug=settings.DEBUG
+    debug=settings.DEBUG,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 # Register domain routers

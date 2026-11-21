@@ -331,6 +331,12 @@ async def test_health_check(client):
 
 
 @pytest.mark.asyncio
+async def test_builtin_api_documentation_routes_are_disabled(client):
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert (await client.get(path)).status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_health_check_reports_database_errors(client):
     async def failing_get_db():
         class FailingSession:

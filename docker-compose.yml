@@ -48,6 +48,29 @@ services:
       mailhog:
         condition: service_started
 
+  swagger-ui:
+    image: swaggerapi/swagger-ui:latest
+    environment:
+      SWAGGER_JSON_URL: /openapi.json
+    volumes:
+      - ./openapi.json:/usr/share/nginx/html/openapi.json:ro
+    expose:
+      - "8080"
+    restart: unless-stopped
+
+  docs-proxy:
+    build:
+      context: ./deploy/swagger
+    environment:
+      DOCS_AUTH_USER: ${DOCS_AUTH_USER:?Set DOCS_AUTH_USER in .env}
+      DOCS_AUTH_PASSWORD: ${DOCS_AUTH_PASSWORD:?Set DOCS_AUTH_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${DOCS_PORT:-8081}:80"
+    depends_on:
+      swagger-ui:
+        condition: service_started
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     ports:
