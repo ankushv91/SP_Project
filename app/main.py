@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
+import json
+from pathlib import Path
 import boto3
-from fastapi import FastAPI, Depends
+from fastapi import Depends, FastAPI, HTTPException, status
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -10,6 +12,9 @@ from app.core.database import get_db, engine, Base
 from app.core.security import set_jwt_secret
 from app.domains.users.router import router as auth_router
 from app.domains.todos.router import router as todo_router
+
+OPENAPI_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "openapi.json"
+
 
 def fetch_jwt_secret() -> str:
     client_options = {}
@@ -32,6 +37,10 @@ async def lifespan(app: FastAPI):
     # Auto-create tables on startup
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    OPENAPI_SCHEMA_PATH.write_text(
+        json.dumps(app.openapi(), indent=2) + "\n",
+        encoding="utf-8",
+    )
     yield
 
 app = FastAPI(
@@ -47,14 +56,20 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(todo_router)
 
-@app.get("/health-check")
+@app.get(
+    "/health-check",
+    responses={503: {"description": "Database connection failed"}},
+)
 async def health_check(db: AsyncSession = Depends(get_db)):
     try:
-        result = await db.execute(text("SELECT 1"))
+        await db.execute(text("SELECT 1"))
         return {
             "status": "success",
             "message": "Successfully connected to PostgreSQL!",
             "environment": settings.ENVIRONMENT
         }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e),
+        ) from e

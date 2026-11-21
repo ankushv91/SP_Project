@@ -44,7 +44,8 @@ Confirm that the API can query PostgreSQL:
 Invoke-RestMethod http://localhost:8000/health-check
 ```
 
-The response should report `"status": "success"`. The API is available at
+The response should report `"status": "success"`; database failures return
+HTTP 503. The API is available at
 `http://localhost:8000`; its built-in `/docs`, `/redoc`, and `/openapi.json`
 routes are disabled so they cannot bypass authentication. Open the protected
 Swagger UI at `http://localhost:8081` (or the port configured by `DOCS_PORT`)
@@ -52,13 +53,11 @@ and enter `DOCS_AUTH_USER` and `DOCS_AUTH_PASSWORD` when prompted. To inspect
 service logs, run
 `docker compose logs -f api db`.
 
-The standalone Swagger UI loads the checked-in `openapi.json`. After changing
-API routes or schemas, regenerate it from the application with:
-
-```powershell
-uv sync --dev
-uv run python scripts/generate_openapi.py
-```
+The API generates `openapi.json` during startup, and Compose shares that file
+with the standalone Swagger UI. Pydantic request and response models include
+examples that appear in the generated schema. After changing API routes or
+schemas, rebuild/restart the API; no separate schema-generation command is
+needed. Unexpected `.env` settings are logged by name at startup.
 
 Verify the docs proxy by opening it in a private browser window (which should
 prompt for credentials), then enter the configured username and password. A

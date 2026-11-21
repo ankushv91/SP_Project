@@ -38,6 +38,8 @@ services:
       SMTP_PORT: 1025
       SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-no-reply@example.com}
       TODO_NOTIFICATION_EMAIL: ${TODO_NOTIFICATION_EMAIL:-todo-notifications@example.com}
+    volumes:
+      - ./openapi.json:/app/openapi.json
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:

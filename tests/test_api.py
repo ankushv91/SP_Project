@@ -1,4 +1,5 @@
 import importlib
+import json
 import logging
 from unittest.mock import AsyncMock
 
@@ -7,7 +8,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.core.database import Base, get_db
 from app.core.security import _get_secret_key, set_jwt_secret
 from app.domains.todos import router as todo_router
@@ -50,9 +51,12 @@ class InMemoryRedis:
 
 
 @pytest.fixture
-async def client(monkeypatch):
+async def client(monkeypatch, tmp_path):
     set_jwt_secret("")
     monkeypatch.setattr(todo_router, "send_todo_created_email", AsyncMock())
+    monkeypatch.setattr(
+        main_module, "OPENAPI_SCHEMA_PATH", tmp_path / "openapi.json"
+    )
     redis_cache = InMemoryRedis()
     monkeypatch.setattr(
         todo_router.todo_service, "get_redis_client", lambda: redis_cache
@@ -352,17 +356,16 @@ async def test_health_check_reports_database_errors(client):
     finally:
         app.dependency_overrides[get_db] = original_override
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "status": "error",
-        "message": "database unavailable",
-    }
+    assert response.status_code == 503
+    assert response.json() == {"detail": "database unavailable"}
 
 
 @pytest.mark.asyncio
-async def test_lifespan_creates_tables(monkeypatch):
+async def test_lifespan_creates_tables_and_generates_openapi(monkeypatch, tmp_path):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     monkeypatch.setattr(main_module, "engine", engine)
+    openapi_path = tmp_path / "openapi.json"
+    monkeypatch.setattr(main_module, "OPENAPI_SCHEMA_PATH", openapi_path)
 
     class FakeSecretsManager:
         def get_secret_value(self, *, SecretId):
@@ -380,6 +383,15 @@ async def test_lifespan_creates_tables(monkeypatch):
     try:
         async with main_module.lifespan(app):
             assert _get_secret_key() == "runtime-test-secret-that-is-long-enough"
+            schema = json.loads(openapi_path.read_text(encoding="utf-8"))
+            assert "/todos" in schema["paths"]
+            assert schema["components"]["schemas"]["TodoCreate"]["examples"][0][
+                "title"
+            ] == "Buy groceries"
+            assert schema["components"]["schemas"]["UserCreate"]["examples"][0][
+                "username"
+            ] == "jane.doe"
+            assert "503" in schema["paths"]["/health-check"]["get"]["responses"]
             async with engine.connect() as connection:
                 tables = await connection.run_sync(
                     lambda sync_connection: set(
@@ -404,3 +416,18 @@ def test_fetch_jwt_secret_rejects_missing_secret_string(monkeypatch):
 
     with pytest.raises(RuntimeError, match="non-empty SecretString"):
         main_module.fetch_jwt_secret()
+
+
+def test_settings_warns_about_unknown_dotenv_keys(tmp_path, caplog):
+    env_file = tmp_path / "test.env"
+    env_file.write_text(
+        "DATABASE_URL=sqlite+aiosqlite:///:memory:\n"
+        "UNEXPECTED_OPTION=do-not-log-this-value\n",
+        encoding="utf-8",
+    )
+    caplog.set_level(logging.WARNING, logger="app.core.config")
+
+    Settings(_env_file=env_file)
+
+    assert "UNEXPECTED_OPTION" in caplog.text
+    assert "do-not-log-this-value" not in caplog.text

@@ -363,6 +363,9 @@
                 "schema": {}
               }
             }
+          },
+          "503": {
+            "description": "Database connection failed"
           }
         }
       }
@@ -469,7 +472,14 @@
         "required": [
           "title"
         ],
-        "title": "TodoCreate"
+        "title": "TodoCreate",
+        "examples": [
+          {
+            "description": "Pick up milk and bread",
+            "is_completed": false,
+            "title": "Buy groceries"
+          }
+        ]
       },
       "TodoResponse": {
         "properties": {
@@ -515,7 +525,17 @@
           "created_at",
           "updated_at"
         ],
-        "title": "TodoResponse"
+        "title": "TodoResponse",
+        "examples": [
+          {
+            "created_at": "2026-01-15T10:30:00Z",
+            "description": "Pick up milk and bread",
+            "id": 1,
+            "is_completed": false,
+            "title": "Buy groceries",
+            "updated_at": "2026-01-15T10:30:00Z"
+          }
+        ]
       },
       "TodoUpdate": {
         "properties": {
@@ -554,7 +574,13 @@
           }
         },
         "type": "object",
-        "title": "TodoUpdate"
+        "title": "TodoUpdate",
+        "examples": [
+          {
+            "is_completed": true,
+            "title": "Buy groceries"
+          }
+        ]
       },
       "Token": {
         "properties": {
@@ -572,7 +598,13 @@
         "required": [
           "access_token"
         ],
-        "title": "Token"
+        "title": "Token",
+        "examples": [
+          {
+            "access_token": "example.jwt.token",
+            "token_type": "bearer"
+          }
+        ]
       },
       "UserCreate": {
         "properties": {
@@ -595,7 +627,14 @@
           "email",
           "password"
         ],
-        "title": "UserCreate"
+        "title": "UserCreate",
+        "examples": [
+          {
+            "email": "jane@example.com",
+            "password": "example-password-not-for-use",
+            "username": "jane.doe"
+          }
+        ]
       },
       "UserResponse": {
         "properties": {
@@ -624,7 +663,15 @@
           "email",
           "created_at"
         ],
-        "title": "UserResponse"
+        "title": "UserResponse",
+        "examples": [
+          {
+            "created_at": "2026-01-15T10:30:00Z",
+            "email": "jane@example.com",
+            "id": 1,
+            "username": "jane.doe"
+          }
+        ]
       },
       "ValidationError": {
         "properties": {

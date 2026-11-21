@@ -1,5 +1,12 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import logging
 from functools import lru_cache
+from typing import Any
+
+from pydantic import model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "SP Project API"
@@ -20,6 +27,23 @@ class Settings(BaseSettings):
 
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+
+    @model_validator(mode="before")
+    @classmethod
+    def warn_about_unexpected_settings(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            valid_names = {name.casefold() for name in cls.model_fields}
+            unexpected_names = sorted(
+                name.upper()
+                for name in values
+                if isinstance(name, str) and name.casefold() not in valid_names
+            )
+            if unexpected_names:
+                logger.warning(
+                    "Ignoring unexpected settings keys: %s",
+                    ", ".join(unexpected_names),
+                )
+        return values
 
     model_config = SettingsConfigDict(
         env_file=".env",
