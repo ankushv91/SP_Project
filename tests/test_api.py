@@ -1,13 +1,16 @@
 import importlib
 import json
 import logging
+import math
 from unittest.mock import AsyncMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.core import rate_limit
 from app.core.config import Settings, settings
 from app.core.database import Base, get_db
 from app.core.security import _get_secret_key, set_jwt_secret
@@ -22,6 +25,7 @@ class InMemoryRedis:
     def __init__(self):
         self.values = {}
         self.expirations = {}
+        self.sorted_sets = {}
 
     async def get(self, key):
         return self.values.get(key)
@@ -49,6 +53,29 @@ class InMemoryRedis:
                 deleted += 1
         return deleted
 
+    async def eval(self, script, number_of_keys, *args):
+        key, now_ms, window_ms, limit, member = args
+        now_ms = int(now_ms)
+        window_ms = int(window_ms)
+        limit = int(limit)
+        entries = self.sorted_sets.setdefault(key, {})
+        entries = {
+            entry: score
+            for entry, score in entries.items()
+            if score > now_ms - window_ms
+        }
+        self.sorted_sets[key] = entries
+
+        if len(entries) >= limit:
+            oldest_score = min(entries.values())
+            retry_after = max(
+                1, math.ceil((window_ms - (now_ms - oldest_score)) / 1_000)
+            )
+            return [0, retry_after, len(entries)]
+
+        entries[member] = now_ms
+        return [1, 0, len(entries)]
+
 
 @pytest.fixture
 async def client(monkeypatch, tmp_path):
@@ -58,6 +85,7 @@ async def client(monkeypatch, tmp_path):
         main_module, "OPENAPI_SCHEMA_PATH", tmp_path / "openapi.json"
     )
     redis_cache = InMemoryRedis()
+    monkeypatch.setattr(rate_limit, "get_redis_client", lambda: redis_cache)
     monkeypatch.setattr(
         todo_router.todo_service, "get_redis_client", lambda: redis_cache
     )
@@ -332,6 +360,40 @@ async def test_health_check(client):
     assert response.status_code == 200
     assert response.json()["status"] == "success"
     assert response.json()["environment"]
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_returns_429_after_endpoint_limit(client, monkeypatch):
+    monkeypatch.setitem(
+        rate_limit.RATE_LIMITS,
+        ("GET", "/health-check"),
+        rate_limit.RateLimit(limit=2, window_seconds=60),
+    )
+
+    assert (await client.get("/health-check")).status_code == 200
+    assert (await client.get("/health-check")).status_code == 200
+    limited = await client.get("/health-check")
+
+    assert limited.status_code == 429
+    assert limited.json() == {"detail": "Rate limit exceeded"}
+    assert limited.headers["Retry-After"].isdigit()
+    assert limited.headers["X-RateLimit-Remaining"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_endpoint_fails_closed_when_redis_is_unavailable(
+    client, monkeypatch
+):
+    class UnavailableRedis:
+        async def eval(self, *args):
+            raise RedisConnectionError("Redis is unavailable")
+
+    monkeypatch.setattr(rate_limit, "get_redis_client", lambda: UnavailableRedis())
+
+    response = await client.get("/health-check")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Rate limiter unavailable"}
 
 
 @pytest.mark.asyncio

@@ -24,9 +24,39 @@ docker compose up --build -d
 
 Compose starts PostgreSQL and Redis and waits for their health checks before
 starting the API. The API connects to these services by their Compose names
-(`db` and `redis`), not `localhost`. Redis is used to cache todo list responses
-for 60 seconds; creating, updating, or deleting a todo invalidates that cache.
-The database data is stored in the `postgres_data` named volume.
+(`db` and `redis`), not `localhost`. Redis caches todo list responses for 60
+seconds and stores atomic sliding-window rate limits per client IP and endpoint.
+Creating, updating, or deleting a todo invalidates the todo list cache. Rate
+limits are configured in `app/core/rate_limit.py`; requests exceeding a limit
+receive HTTP 429 and a `Retry-After` header. If Redis is unavailable, limited
+routes return HTTP 503 rather than bypassing the limiter. The database data is
+stored in the `postgres_data` named volume.
+
+| Endpoint | Limit |
+| --- | ---: |
+| `GET /health-check` | 20/minute |
+| `POST /auth/register` | 5/minute |
+| `POST /auth/token` | 10/minute |
+| `GET /auth/me` | 60/minute |
+| `GET /todos` | 60/minute |
+| `POST /todos` | 30/minute |
+| `GET /todos/{todo_id}` | 60/minute |
+| `PUT /todos/{todo_id}` | 30/minute |
+| `DELETE /todos/{todo_id}` | 30/minute |
+
+## Load-test rate limits with Locust
+
+Install the optional load-test dependencies with `uv sync --group load`, then
+start the API, PostgreSQL, and Redis as described above. Run a headless test
+against the local API:
+
+```powershell
+uv run locust -f locustfile.py --headless --host http://localhost:8000 -u 20 -r 5 -t 30s
+```
+
+The script repeatedly calls `/health-check`, reports 429 responses as rate-limit
+failures in Locust's statistics, and exits unsuccessfully if the run never
+receives a 429. The health-check limit is 20 requests per minute per client IP.
 
 PostgreSQL uses `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` only
 when initializing an empty data volume. Changing these values in `.env` does not

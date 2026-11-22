@@ -9,6 +9,7 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.database import get_db, engine, Base
+from app.core.rate_limit import RedisRateLimitMiddleware
 from app.core.security import set_jwt_secret
 from app.domains.users.router import router as auth_router
 from app.domains.todos.router import router as todo_router
@@ -51,6 +52,7 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+app.add_middleware(RedisRateLimitMiddleware)
 
 # Register domain routers
 app.include_router(auth_router)
