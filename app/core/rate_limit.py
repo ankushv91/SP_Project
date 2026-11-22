@@ -1,3 +1,5 @@
+"""Redis-backed per-client sliding-window rate limiting for HTTP endpoints."""
+
 import hashlib
 import logging
 import math
@@ -15,6 +17,7 @@ from app.core.redis import get_redis_client
 logger = logging.getLogger(__name__)
 
 SLIDING_WINDOW_SCRIPT = """
+-- Prune expired requests, then check and record the new request atomically.
 local now = tonumber(ARGV[1])
 local window = tonumber(ARGV[2])
 local limit = tonumber(ARGV[3])
@@ -56,11 +59,13 @@ def _policy_for(method: str, path: str) -> tuple[str, RateLimit] | None:
         return path, RATE_LIMITS[exact_key]
 
     todo_id_prefix = "/todos/"
-    if path.startswith(todo_id_prefix) and path[len(todo_id_prefix) :].isdigit():
-        route_path = "/todos/{todo_id}"
-        policy = RATE_LIMITS.get((method, route_path))
-        if policy:
-            return route_path, policy
+    if path.startswith(todo_id_prefix):
+        todo_id = path[len(todo_id_prefix) :]
+        if todo_id and "/" not in todo_id:
+            route_path = "/todos/{todo_id}"
+            policy = RATE_LIMITS.get((method, route_path))
+            if policy:
+                return route_path, policy
     return None
 
 
@@ -73,6 +78,7 @@ class RedisRateLimitMiddleware(BaseHTTPMiddleware):
         route_path, policy = matched_policy
         client_host = request.client.host if request.client else "unknown"
         client_hash = hashlib.sha256(client_host.encode("utf-8")).hexdigest()
+        # Keep Redis keys stable per client and endpoint without storing raw IPs.
         key = f"rate-limit:{request.method}:{route_path}:{client_hash}"
         now_ms = time.time_ns() // 1_000_000
         window_ms = policy.window_seconds * 1_000
@@ -102,6 +108,7 @@ class RedisRateLimitMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Rate limit exceeded"},
+                # Retry-After is seconds; the other headers report the exhausted quota.
                 headers={
                     "Retry-After": str(retry_after),
                     "X-RateLimit-Limit": str(policy.limit),
@@ -110,6 +117,7 @@ class RedisRateLimitMiddleware(BaseHTTPMiddleware):
             )
 
         response = await call_next(request)
+        # Report the configured quota and remaining requests after this request.
         response.headers["X-RateLimit-Limit"] = str(policy.limit)
         response.headers["X-RateLimit-Remaining"] = str(max(0, policy.limit - used))
         return response

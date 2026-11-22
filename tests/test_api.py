@@ -370,14 +370,31 @@ async def test_rate_limit_returns_429_after_endpoint_limit(client, monkeypatch):
         rate_limit.RateLimit(limit=2, window_seconds=60),
     )
 
-    assert (await client.get("/health-check")).status_code == 200
-    assert (await client.get("/health-check")).status_code == 200
+    first = await client.get("/health-check")
+    assert first.status_code == 200
+    assert first.headers["X-RateLimit-Limit"] == "2"
+    assert first.headers["X-RateLimit-Remaining"] == "1"
+
+    second = await client.get("/health-check")
+    assert second.status_code == 200
+    assert second.headers["X-RateLimit-Remaining"] == "0"
+
     limited = await client.get("/health-check")
 
     assert limited.status_code == 429
     assert limited.json() == {"detail": "Rate limit exceeded"}
     assert limited.headers["Retry-After"].isdigit()
     assert limited.headers["X-RateLimit-Remaining"] == "0"
+
+
+def test_todo_rate_limit_matches_non_numeric_single_segment_ids():
+    expected = rate_limit.RATE_LIMITS[("GET", "/todos/{todo_id}")]
+
+    assert rate_limit._policy_for("GET", "/todos/abc-123") == (
+        "/todos/{todo_id}",
+        expected,
+    )
+    assert rate_limit._policy_for("GET", "/todos/abc-123/nested") is None
 
 
 @pytest.mark.asyncio
