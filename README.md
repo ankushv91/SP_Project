@@ -1,9 +1,34 @@
+[![Tests and Docker publish](https://github.com/ankushv91/SP_Project/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/ankushv91/SP_Project/actions/workflows/tests.yml)
+
 # Development
 
 Install the project and its development dependencies with `uv sync --dev`.
 
 Run the API test suite and generate the coverage report with `uv run pytest`.
 The test command enforces more than 80% coverage for the `app` package.
+
+## Publish the API Docker image
+
+When a push or merge reaches `main` and the test job passes, the workflow builds
+the root `Dockerfile` and pushes two tags to Docker Hub:
+
+- `DOCKERHUB_USERNAME/sp-project:latest`
+- `DOCKERHUB_USERNAME/sp-project:sha-<commit>`
+
+Before the first publish:
+
+1. Create a Docker Hub repository named `sp-project` under your Docker Hub
+   account.
+2. In Docker Hub, create an access token with permission to read and write
+   repositories.
+3. In the GitHub repository, open **Settings → Secrets and variables →
+   Actions → New repository secret**. Add `DOCKERHUB_USERNAME` with your
+   Docker Hub username, and `DOCKERHUB_TOKEN` with the access token value.
+
+Do not commit the access token or put it in `.env`. After a successful publish,
+you can pull the image with
+`docker pull DOCKERHUB_USERNAME/sp-project:latest` (replace the placeholder
+with your Docker Hub username).
 
 ## Run the API, PostgreSQL, and Redis with Docker Compose
 
