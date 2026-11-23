@@ -1,4 +1,4 @@
-[![Tests and Docker publish](https://github.com/ankushv91/SP_Project/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/ankushv91/SP_Project/actions/workflows/tests.yml)
+[![Tests and Docker publish](https://github.com/ankushv91/SP_Project/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/ankushv91/SP_Project/actions/workflows/tests.yml)
 
 # Development
 
@@ -9,7 +9,7 @@ The test command enforces more than 80% coverage for the `app` package.
 
 ## Publish the API Docker image
 
-When a push or merge reaches `main` and the test job passes, the workflow builds
+When a push or merge reaches `master` and the test job passes, the workflow builds
 the root `Dockerfile` and pushes two tags to Docker Hub:
 
 - `DOCKERHUB_USERNAME/sp-project:latest`
