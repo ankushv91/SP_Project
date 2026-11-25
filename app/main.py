@@ -2,11 +2,16 @@ from contextlib import asynccontextmanager
 import json
 from pathlib import Path
 import boto3
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
+from app.core.api_versioning import (
+    AcceptHeaderVersionMiddleware,
+    DEFAULT_API_VERSION,
+    SUPPORTED_API_VERSIONS,
+)
 from app.core.config import settings
 from app.core.database import get_db, engine, Base
 from app.core.rate_limit import RedisRateLimitMiddleware
@@ -38,30 +43,22 @@ async def lifespan(app: FastAPI):
     # Auto-create tables on startup
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    app.state.openapi_schemas = {
+        version: versioned_app.openapi()
+        for version, versioned_app in versioned_apis.items()
+    }
     OPENAPI_SCHEMA_PATH.write_text(
-        json.dumps(app.openapi(), indent=2) + "\n",
+        json.dumps(
+            app.state.openapi_schemas[DEFAULT_API_VERSION],
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
     yield
 
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    lifespan=lifespan,
-    debug=settings.DEBUG,
-    docs_url=None,
-    redoc_url=None,
-    openapi_url=None,
-)
-app.add_middleware(RedisRateLimitMiddleware)
 
-# Register domain routers
-app.include_router(auth_router)
-app.include_router(todo_router)
-
-@app.get(
-    "/health-check",
-    responses={503: {"description": "Database connection failed"}},
-)
 async def health_check(db: AsyncSession = Depends(get_db)):
     try:
         await db.execute(text("SELECT 1"))
@@ -75,3 +72,64 @@ async def health_check(db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(e),
         ) from e
+
+
+def create_version_router(version: str) -> APIRouter:
+    router = APIRouter()
+
+    @router.get(
+        "/version",
+        operation_id=f"get_{version}_version",
+        tags=["API version"],
+    )
+    async def get_api_version() -> dict[str, str]:
+        return {"version": version}
+
+    return router
+
+
+def create_versioned_api(version: str) -> FastAPI:
+    versioned_app = FastAPI(
+        title=f"{settings.PROJECT_NAME} API {version}",
+        version=version,
+        debug=settings.DEBUG,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
+    versioned_app.add_middleware(RedisRateLimitMiddleware)
+    versioned_app.include_router(auth_router)
+    versioned_app.include_router(todo_router)
+    versioned_app.include_router(create_version_router(version))
+    versioned_app.add_api_route(
+        "/health-check",
+        health_check,
+        methods=["GET"],
+        responses={503: {"description": "Database connection failed"}},
+        tags=["Health"],
+    )
+    return versioned_app
+
+
+versioned_apis = {
+    version: create_versioned_api(version) for version in SUPPORTED_API_VERSIONS
+}
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    lifespan=lifespan,
+    debug=settings.DEBUG,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
+app.add_middleware(
+    AcceptHeaderVersionMiddleware,
+    apps=versioned_apis,
+    default_version=DEFAULT_API_VERSION,
+    openapi_schemas={
+        version: versioned_app.openapi
+        for version, versioned_app in versioned_apis.items()
+    },
+)
+for versioned_app in versioned_apis.values():
+    versioned_app.dependency_overrides = app.dependency_overrides

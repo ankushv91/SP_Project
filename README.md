@@ -114,6 +114,95 @@ examples that appear in the generated schema. After changing API routes or
 schemas, rebuild/restart the API; no separate schema-generation command is
 needed. Unexpected `.env` settings are logged by name at startup.
 
+## Choose an API version with the Accept header
+
+The API supports `v1` and `v2` at the same endpoint paths. Select a version
+with `Accept: application/vnd.sp-project.v1+json` or
+`Accept: application/vnd.sp-project.v2+json`. Existing clients that omit
+`Accept`, or request generic JSON, continue to use `v1`. Unsupported versions
+and unacceptable media types receive HTTP 406. Responses include an
+`X-API-Version` header and vary on `Accept`.
+
+After changing the API code, rebuild the API container:
+
+```powershell
+docker compose up --build -d api
+```
+
+Try both routers from PowerShell:
+
+```powershell
+curl.exe -i -H "Accept: application/vnd.sp-project.v1+json" http://localhost:8000/version
+curl.exe -i -H "Accept: application/vnd.sp-project.v2+json" http://localhost:8000/version
+curl.exe -i -H "Accept: application/vnd.sp-project.v9+json" http://localhost:8000/version
+```
+
+The first two requests should return their requested version in both the JSON
+body and `X-API-Version` response header. The last should return HTTP 406.
+Each router also accepts `Accept: application/json; version=1` or `version=2`.
+The generated OpenAPI documents are available at
+`http://localhost:8000/openapi/v1.json` and
+`http://localhost:8000/openapi/v2.json`. The protected Swagger UI continues to
+show the default `v1` schema.
+
+## Collect API logs with Elasticsearch and Kibana
+
+The Compose stack also starts Elasticsearch, Kibana, and Filebeat. Filebeat
+reads Docker's container log files but indexes only the API container, using
+the `log_source` label. Logs are searchable in the `filebeat-*` index pattern.
+This local-development setup disables Elasticsearch security and binds both
+web ports to localhost; do not expose these services to an untrusted network.
+Elasticsearch data is retained in the `elasticsearch_data` volume.
+Compose supplies a development-only Kibana encryption key so alert rules can
+be created. You can override it with a unique, random value of at least 32
+characters in `.env` as `KIBANA_ENCRYPTION_KEY`; never use the development
+default in a deployed environment.
+
+Start or update the stack:
+
+```powershell
+docker compose up --build -d
+docker compose ps
+```
+
+Allow Elasticsearch and Kibana a minute or two to initialize, then open
+`http://localhost:5601`.
+
+### Verify the Kibana dashboard and alert
+
+The `kibana-setup` Compose service imports the `API logs` data view and
+`API logs overview` dashboard, then creates the `API error logs` rule. It waits
+for Kibana and the Filebeat index before provisioning. No manual Kibana setup
+is required.
+
+Open `http://localhost:5601`:
+
+1. In **Discover**, select the `API logs` data view and set the time picker to
+   **Last 15 minutes**. If it is empty, make a request to
+   `http://localhost:8000/health-check`, wait briefly, and refresh.
+2. Open **Analytics → Dashboards → API logs overview** to view the saved API
+   log table.
+3. Open **Observability → Alerts → Manage Rules** and confirm that
+   `API error logs` is enabled. It checks every minute for `ERROR` log messages
+   in the last five minutes.
+
+To see why setup did not complete, run
+`docker compose logs kibana-setup`. Rerun the idempotent setup with
+`docker compose run --rm kibana-setup`. The rule appears in Kibana but sends no
+email or chat until you configure an action connector.
+
+Useful checks:
+
+```powershell
+Invoke-RestMethod http://localhost:9200
+docker compose logs --tail 100 filebeat elasticsearch kibana
+```
+
+If Elasticsearch exits with a virtual-memory map error on a native Linux
+Docker host, set `vm.max_map_count=262144` on that host and restart the stack.
+The Kibana alert rule has no external notification action until you configure
+a connector.
+
 Verify the docs proxy by opening it in a private browser window (which should
 prompt for credentials), then enter the configured username and password. A
 request without credentials should receive HTTP 401.
@@ -137,7 +226,8 @@ docker compose down
 ```
 
 The named database volume is retained, so data is preserved when the containers
-are stopped. To remove the database data as well, run `docker compose down -v`.
+are stopped. To remove the database and Elasticsearch data as well, run
+`docker compose down -v`.
 
 ## Load the JWT signing secret from AWS Secrets Manager
 
@@ -153,6 +243,11 @@ credentials or the JWT secret in the application environment.
 
 Grant the API's AWS execution role permission to call
 `secretsmanager:GetSecretValue` for that secret. For local or Compose runs,
-configure AWS credentials using a supported AWS SDK credential provider. The
-API fails to start if the secret cannot be retrieved or has no non-empty
-`SecretString`.
+configure a profile with the AWS CLI on the host. Compose passes `AWS_PROFILE`
+to the API and mounts the host's AWS configuration directory read-only inside
+the container (`%USERPROFILE%\.aws` on Windows or `$HOME/.aws` on Linux/macOS).
+Set `AWS_CONFIG_DIR` in `.env` if the directory is elsewhere and `AWS_PROFILE`
+to the profile name (or use the `default` profile); never put AWS access keys
+in `.env`. Use a development profile with only the permissions needed to read
+the configured secret. The API fails to start if the secret cannot be
+retrieved or has no non-empty `SecretString`.

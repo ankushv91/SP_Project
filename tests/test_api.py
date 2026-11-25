@@ -363,6 +363,76 @@ async def test_health_check(client):
 
 
 @pytest.mark.asyncio
+async def test_accept_header_routes_to_requested_api_version(client):
+    for version in ("v1", "v2"):
+        response = await client.get(
+            "/version",
+            headers={
+                "Accept": f"application/vnd.sp-project.{version}+json"
+            },
+        )
+        assert response.status_code == 200
+        assert response.json() == {"version": version}
+        assert response.headers["X-API-Version"] == version
+        assert response.headers["Vary"] == "Accept"
+
+
+@pytest.mark.asyncio
+async def test_accept_header_version_parameter_and_default_version(client):
+    version_two = await client.get(
+        "/version",
+        headers={"Accept": "application/json; version=2"},
+    )
+    default_version = await client.get("/version")
+
+    assert version_two.json() == {"version": "v2"}
+    assert default_version.json() == {"version": "v1"}
+
+
+@pytest.mark.asyncio
+async def test_accept_header_uses_quality_to_choose_between_versions(client):
+    response = await client.get(
+        "/version",
+        headers={
+            "Accept": (
+                "application/vnd.sp-project.v1+json;q=0.2, "
+                "application/vnd.sp-project.v2+json;q=0.9"
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"version": "v2"}
+
+
+@pytest.mark.asyncio
+async def test_accept_header_rejects_unsupported_versions_and_media_types(client):
+    unsupported_version = await client.get(
+        "/version",
+        headers={"Accept": "application/vnd.sp-project.v9+json"},
+    )
+    unsupported_media_type = await client.get(
+        "/version",
+        headers={"Accept": "text/plain"},
+    )
+
+    assert unsupported_version.status_code == 406
+    assert unsupported_version.json()["supported_versions"] == ["v1", "v2"]
+    assert unsupported_media_type.status_code == 406
+
+
+@pytest.mark.asyncio
+async def test_versioned_openapi_documents_are_available(client):
+    for version in ("v1", "v2"):
+        response = await client.get(f"/openapi/{version}.json")
+
+        assert response.status_code == 200
+        assert response.json()["info"]["version"] == version
+        assert "/version" in response.json()["paths"]
+        assert response.headers["X-API-Version"] == version
+
+
+@pytest.mark.asyncio
 async def test_rate_limit_returns_429_after_endpoint_limit(client, monkeypatch):
     monkeypatch.setitem(
         rate_limit.RATE_LIMITS,
@@ -471,6 +541,10 @@ async def test_lifespan_creates_tables_and_generates_openapi(monkeypatch, tmp_pa
                 "username"
             ] == "jane.doe"
             assert "503" in schema["paths"]["/health-check"]["get"]["responses"]
+            for version, versioned_app in main_module.versioned_apis.items():
+                version_schema = versioned_app.openapi()
+                assert version_schema["info"]["version"] == version
+                assert "/version" in version_schema["paths"]
             async with engine.connect() as connection:
                 tables = await connection.run_sync(
                     lambda sync_connection: set(
