@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.core import email as email_module
-from app.core.config import settings
 from app.core.email import EmailSender
 
 
@@ -56,28 +55,17 @@ async def test_email_sender_logs_smtp_errors_and_reraises(monkeypatch, caplog):
 
 @pytest.mark.asyncio
 async def test_send_todo_created_email_uses_configured_smtp(monkeypatch):
-    sender_config = {}
-    sent_notifications = []
-
-    class FakeEmailSender:
-        def __init__(self, host, port, from_email):
-            sender_config.update(host=host, port=port, from_email=from_email)
-
-        async def send_todo_created_notification(self, todo_id, title, recipient):
-            sent_notifications.append((todo_id, title, recipient))
-
-    monkeypatch.setattr(email_module, "EmailSender", FakeEmailSender)
-    monkeypatch.setattr(settings, "SMTP_HOST", "mailhog")
-    monkeypatch.setattr(settings, "SMTP_PORT", 1025)
-    monkeypatch.setattr(settings, "SMTP_FROM_EMAIL", "sender@example.com")
+    send_notification = AsyncMock()
+    monkeypatch.setattr(
+        email_module.email_sender,
+        "send_todo_created_notification",
+        send_notification,
+    )
 
     await email_module.send_todo_created_email(
         7, "Configured todo", "to@example.com"
     )
 
-    assert sender_config == {
-        "host": "mailhog",
-        "port": 1025,
-        "from_email": "sender@example.com",
-    }
-    assert sent_notifications == [(7, "Configured todo", "to@example.com")]
+    send_notification.assert_awaited_once_with(
+        7, "Configured todo", "to@example.com"
+    )

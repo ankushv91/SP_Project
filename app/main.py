@@ -45,8 +45,7 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
 
     app.state.openapi_schemas = {
-        version: versioned_app.openapi()
-        for version, versioned_app in versioned_apis.items()
+        version: get_version_openapi(version) for version in versioned_apis
     }
     OPENAPI_SCHEMA_PATH.write_text(
         json.dumps(
@@ -114,6 +113,20 @@ def create_versioned_api(version: str) -> FastAPI:
 versioned_apis = {
     version: create_versioned_api(version) for version in SUPPORTED_API_VERSIONS
 }
+
+
+def get_version_openapi(version: str) -> dict:
+    schema = versioned_apis[version].openapi()
+    paths = dict(schema["paths"])
+    paths.update(
+        {
+            f"/{version}{path}": operations
+            for path, operations in schema["paths"].items()
+        }
+    )
+    return {**schema, "paths": paths}
+
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     lifespan=lifespan,
@@ -127,8 +140,8 @@ app.add_middleware(
     apps=versioned_apis,
     default_version=DEFAULT_API_VERSION,
     openapi_schemas={
-        version: versioned_app.openapi
-        for version, versioned_app in versioned_apis.items()
+        version: lambda version=version: get_version_openapi(version)
+        for version in versioned_apis
     },
 )
 for versioned_app in versioned_apis.values():

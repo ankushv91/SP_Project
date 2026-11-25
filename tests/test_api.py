@@ -11,6 +11,10 @@ from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core import rate_limit
+from app.core.api_versioning import (
+    NotAcceptableAPIRequest,
+    parse_accept_version,
+)
 from app.core.config import Settings, settings
 from app.core.database import Base, get_db
 from app.core.security import _get_secret_key, set_jwt_secret
@@ -378,6 +382,27 @@ async def test_accept_header_routes_to_requested_api_version(client):
 
 
 @pytest.mark.asyncio
+async def test_url_prefix_routes_to_requested_version(client):
+    response = await client.get(
+        "/v2/version",
+        headers={"Accept": "application/vnd.sp-project.v1+json"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"version": "v2"}
+    assert response.headers["X-API-Version"] == "v2"
+
+
+@pytest.mark.asyncio
+async def test_url_prefix_routes_existing_api_endpoints(client):
+    response = await client.get("/v2/todos")
+
+    assert response.status_code == 200
+    assert response.json() == []
+    assert response.headers["X-API-Version"] == "v2"
+
+
+@pytest.mark.asyncio
 async def test_accept_header_version_parameter_and_default_version(client):
     version_two = await client.get(
         "/version",
@@ -421,6 +446,20 @@ async def test_accept_header_rejects_unsupported_versions_and_media_types(client
     assert unsupported_media_type.status_code == 406
 
 
+def test_accept_version_normalization_does_not_double_prefix():
+    assert parse_accept_version(
+        "application/vnd.sp-project.1+json"
+    ) == "v1"
+    assert parse_accept_version(
+        "application/vnd.sp-project.v1+json"
+    ) == "v1"
+    assert parse_accept_version(
+        "application/json; version=V2"
+    ) == "v2"
+    with pytest.raises(NotAcceptableAPIRequest, match="Unsupported API version"):
+        parse_accept_version("application/json; version=vv1")
+
+
 @pytest.mark.asyncio
 async def test_versioned_openapi_documents_are_available(client):
     for version in ("v1", "v2"):
@@ -429,6 +468,7 @@ async def test_versioned_openapi_documents_are_available(client):
         assert response.status_code == 200
         assert response.json()["info"]["version"] == version
         assert "/version" in response.json()["paths"]
+        assert f"/{version}/todos" in response.json()["paths"]
         assert response.headers["X-API-Version"] == version
 
 
@@ -541,10 +581,11 @@ async def test_lifespan_creates_tables_and_generates_openapi(monkeypatch, tmp_pa
                 "username"
             ] == "jane.doe"
             assert "503" in schema["paths"]["/health-check"]["get"]["responses"]
-            for version, versioned_app in main_module.versioned_apis.items():
-                version_schema = versioned_app.openapi()
+            for version in main_module.versioned_apis:
+                version_schema = main_module.get_version_openapi(version)
                 assert version_schema["info"]["version"] == version
                 assert "/version" in version_schema["paths"]
+                assert f"/{version}/todos" in version_schema["paths"]
             async with engine.connect() as connection:
                 tables = await connection.run_sync(
                     lambda sync_connection: set(
@@ -584,3 +625,11 @@ def test_settings_warns_about_unknown_dotenv_keys(tmp_path, caplog):
 
     assert "UNEXPECTED_OPTION" in caplog.text
     assert "do-not-log-this-value" not in caplog.text
+
+
+def test_settings_use_sqlite_when_database_url_is_not_configured(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    configured = Settings(_env_file=None)
+
+    assert configured.DATABASE_URL == "sqlite+aiosqlite:///./test.db"

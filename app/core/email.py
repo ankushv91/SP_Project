@@ -38,10 +38,12 @@ class EmailSender:
         logger.info("Sent todo creation email for todo_id=%s", todo_id)
 
 
+email_sender = EmailSender(
+    host=settings.SMTP_HOST,
+    port=settings.SMTP_PORT,
+    from_email=settings.SMTP_FROM_EMAIL,
+)
+
+
 async def send_todo_created_email(todo_id: int, title: str, recipient: str) -> None:
-    sender = EmailSender(
-        host=settings.SMTP_HOST,
-        port=settings.SMTP_PORT,
-        from_email=settings.SMTP_FROM_EMAIL,
-    )
-    await sender.send_todo_created_notification(todo_id, title, recipient)
+    await email_sender.send_todo_created_notification(todo_id, title, recipient)

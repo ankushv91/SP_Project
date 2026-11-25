@@ -130,6 +130,15 @@ class AcceptHeaderVersionMiddleware:
             return
 
         path = scope.get("path", "")
+        path_version = None
+        route_path = path
+        for candidate in self.apps:
+            prefix = f"/{candidate}"
+            if path == prefix or path.startswith(f"{prefix}/"):
+                path_version = candidate
+                route_path = path[len(prefix) :] or "/"
+                break
+
         for version, schema_getter in self.openapi_schemas.items():
             if path == f"/openapi/{version}.json":
                 await JSONResponse(
@@ -142,30 +151,43 @@ class AcceptHeaderVersionMiddleware:
                 )
                 return
 
-        accept_header = ", ".join(
-            value.decode("latin-1")
-            for name, value in scope.get("headers", [])
-            if name.lower() == b"accept"
-        )
-        try:
-            version = parse_accept_version(
-                accept_header,
-                default_version=self.default_version,
-                supported_versions=tuple(self.apps),
+        if path_version is None:
+            accept_header = ", ".join(
+                value.decode("latin-1")
+                for name, value in scope.get("headers", [])
+                if name.lower() == b"accept"
             )
-        except NotAcceptableAPIRequest as error:
-            response = JSONResponse(
-                status_code=406,
-                content={
-                    "detail": str(error),
-                    "supported_versions": list(self.apps),
-                },
-                headers={"Vary": "Accept"},
-            )
-            await response(scope, receive, send)
-            return
+            try:
+                version = parse_accept_version(
+                    accept_header,
+                    default_version=self.default_version,
+                    supported_versions=tuple(self.apps),
+                )
+            except NotAcceptableAPIRequest as error:
+                response = JSONResponse(
+                    status_code=406,
+                    content={
+                        "detail": str(error),
+                        "supported_versions": list(self.apps),
+                    },
+                    headers={"Vary": "Accept"},
+                )
+                await response(scope, receive, send)
+                return
+        else:
+            version = path_version
 
         versioned_scope = dict(scope)
+        if path_version is not None:
+            versioned_scope["path"] = route_path
+            versioned_scope["root_path"] = (
+                f"{scope.get('root_path', '').rstrip('/')}/{version}"
+            )
+            raw_path = scope.get("raw_path", b"")
+            raw_prefix = f"/{version}".encode("ascii")
+            if raw_path.startswith(raw_prefix):
+                versioned_scope["raw_path"] = raw_path[len(raw_prefix) :] or b"/"
+
         versioned_state = dict(scope.get("state", {}))
         versioned_state["api_version"] = version
         versioned_scope["state"] = versioned_state

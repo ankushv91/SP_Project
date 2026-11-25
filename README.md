@@ -57,6 +57,12 @@ receive HTTP 429 and a `Retry-After` header. If Redis is unavailable, limited
 routes return HTTP 503 rather than bypassing the limiter. The database data is
 stored in the `postgres_data` named volume.
 
+When running the API directly outside Compose, `DATABASE_URL` defaults to
+`sqlite+aiosqlite:///./test.db` if it is not set. Override `DATABASE_URL` in
+`.env` to use another database; the Compose API service sets a PostgreSQL URL
+automatically. SQLite is included as a runtime dependency for this development
+default.
+
 | Endpoint | Limit |
 | --- | ---: |
 | `GET /health-check` | 20/minute |
@@ -116,12 +122,15 @@ needed. Unexpected `.env` settings are logged by name at startup.
 
 ## Choose an API version with the Accept header
 
-The API supports `v1` and `v2` at the same endpoint paths. Select a version
-with `Accept: application/vnd.sp-project.v1+json` or
-`Accept: application/vnd.sp-project.v2+json`. Existing clients that omit
-`Accept`, or request generic JSON, continue to use `v1`. Unsupported versions
-and unacceptable media types receive HTTP 406. Responses include an
-`X-API-Version` header and vary on `Accept`.
+The API supports `v1` and `v2` through either Accept-header negotiation or a
+versioned path prefix. Select a version with
+`Accept: application/vnd.sp-project.v1+json` or
+`Accept: application/vnd.sp-project.v2+json`, or use paths such as
+`/v1/todos` and `/v2/todos`. A version in the URL takes precedence over the
+Accept header. Existing clients that omit `Accept`, or request generic JSON,
+continue to use `v1`. Unsupported versions and unacceptable media types
+receive HTTP 406. Responses include an `X-API-Version` header and vary on
+`Accept`.
 
 After changing the API code, rebuild the API container:
 
@@ -135,10 +144,14 @@ Try both routers from PowerShell:
 curl.exe -i -H "Accept: application/vnd.sp-project.v1+json" http://localhost:8000/version
 curl.exe -i -H "Accept: application/vnd.sp-project.v2+json" http://localhost:8000/version
 curl.exe -i -H "Accept: application/vnd.sp-project.v9+json" http://localhost:8000/version
+curl.exe -i http://localhost:8000/v1/todos
+curl.exe -i http://localhost:8000/v2/todos
 ```
 
 The first two requests should return their requested version in both the JSON
-body and `X-API-Version` response header. The last should return HTTP 406.
+body and `X-API-Version` response header. The unsupported version should
+return HTTP 406. The last two requests call the version-specific Todo routers
+using path-based versioning.
 Each router also accepts `Accept: application/json; version=1` or `version=2`.
 The generated OpenAPI documents are available at
 `http://localhost:8000/openapi/v1.json` and
