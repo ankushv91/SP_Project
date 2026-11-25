@@ -118,7 +118,8 @@ The API generates `openapi.json` during startup, and Compose shares that file
 with the standalone Swagger UI. Pydantic request and response models include
 examples that appear in the generated schema. After changing API routes or
 schemas, rebuild/restart the API; no separate schema-generation command is
-needed. Unexpected `.env` settings are logged by name at startup.
+needed. Unknown `.env` settings are logged by name and rejected at startup;
+their values are redacted from validation errors.
 
 ## Choose an API version with the Accept header
 

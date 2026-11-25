@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from pydantic import ValidationError
 from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -612,7 +613,9 @@ def test_fetch_jwt_secret_rejects_missing_secret_string(monkeypatch):
         main_module.fetch_jwt_secret()
 
 
-def test_settings_warns_about_unknown_dotenv_keys(tmp_path, caplog):
+def test_settings_reject_unknown_dotenv_keys_without_logging_values(
+    tmp_path, caplog
+):
     env_file = tmp_path / "test.env"
     env_file.write_text(
         "DATABASE_URL=sqlite+aiosqlite:///:memory:\n"
@@ -621,10 +624,27 @@ def test_settings_warns_about_unknown_dotenv_keys(tmp_path, caplog):
     )
     caplog.set_level(logging.WARNING, logger="app.core.config")
 
-    Settings(_env_file=env_file)
+    with pytest.raises(ValidationError, match="unexpected_option") as error:
+        Settings(_env_file=env_file)
 
     assert "UNEXPECTED_OPTION" in caplog.text
     assert "do-not-log-this-value" not in caplog.text
+    assert "do-not-log-this-value" not in str(error.value)
+
+
+def test_settings_allow_known_compose_only_dotenv_keys(tmp_path):
+    env_file = tmp_path / "compose.env"
+    env_file.write_text(
+        "DATABASE_URL=sqlite+aiosqlite:///:memory:\n"
+        "POSTGRES_PORT=5433\n"
+        "AWS_PROFILE=development\n"
+        "KIBANA_ENCRYPTION_KEY=local-development-key\n",
+        encoding="utf-8",
+    )
+
+    configured = Settings(_env_file=env_file)
+
+    assert configured.DATABASE_URL == "sqlite+aiosqlite:///:memory:"
 
 
 def test_settings_use_sqlite_when_database_url_is_not_configured(monkeypatch):

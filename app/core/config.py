@@ -7,6 +7,27 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
+COMPOSE_ONLY_SETTINGS = frozenset(
+    {
+        "POSTGRES_DB",
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "POSTGRES_PORT",
+        "API_PORT",
+        "REDIS_PORT",
+        "DOCS_PORT",
+        "DOCS_AUTH_USER",
+        "DOCS_AUTH_PASSWORD",
+        "MAILHOG_UI_PORT",
+        "AWS_PROFILE",
+        "AWS_CONFIG_DIR",
+        "ELASTIC_VERSION",
+        "ELASTICSEARCH_PORT",
+        "KIBANA_PORT",
+        "KIBANA_ENCRYPTION_KEY",
+    }
+)
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "SP Project API"
@@ -36,19 +57,35 @@ class Settings(BaseSettings):
             unexpected_names = sorted(
                 name.upper()
                 for name in values
-                if isinstance(name, str) and name.casefold() not in valid_names
+                if isinstance(name, str)
+                and name.casefold() not in valid_names
+                and name.upper() not in COMPOSE_ONLY_SETTINGS
             )
             if unexpected_names:
                 logger.warning(
-                    "Ignoring unexpected settings keys: %s",
+                    "Unexpected settings keys: %s",
                     ", ".join(unexpected_names),
                 )
+            return {
+                name: (
+                    "<redacted>"
+                    if isinstance(name, str)
+                    and name.casefold() not in valid_names
+                    and name.upper() not in COMPOSE_ONLY_SETTINGS
+                    else value
+                )
+                for name, value in values.items()
+                if not (
+                    isinstance(name, str)
+                    and name.upper() in COMPOSE_ONLY_SETTINGS
+                )
+            }
         return values
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        extra="ignore"
+        extra="forbid",
     )
 
 @lru_cache
