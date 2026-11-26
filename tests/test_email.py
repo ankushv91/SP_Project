@@ -10,23 +10,20 @@ from app.core.email import EmailSender
 
 @pytest.mark.asyncio
 async def test_email_sender_sends_todo_notification(monkeypatch, caplog):
-    send = AsyncMock()
-    monkeypatch.setattr("app.core.email.aiosmtplib.send", send)
+    client = MagicMock()
+    client.is_connected = False
+    client.connect = AsyncMock()
+    client.send_message = AsyncMock()
+    client.close = MagicMock()
+    monkeypatch.setattr("app.core.email.aiosmtplib.SMTP", MagicMock(return_value=client))
     caplog.set_level(logging.INFO, logger="app.core.email")
 
-    await EmailSender(
-        "mailhog", 1025, "from@example.com"
-    ).send_todo_created_notification(
-        42, "Test todo", "to@example.com"
-    )
+    sender = EmailSender("mailhog", 1025, "from@example.com")
+    await sender.send_todo_created_notification(42, "Test todo", "to@example.com")
 
-    send.assert_awaited_once()
-    message = send.await_args.args[0]
-    assert send.await_args.kwargs == {
-        "hostname": "mailhog",
-        "port": 1025,
-        "timeout": 10,
-    }
+    client.connect.assert_awaited_once_with()
+    client.send_message.assert_awaited_once()
+    message = client.send_message.await_args.args[0]
     assert isinstance(message, EmailMessage)
     assert message["Subject"] == "Todo created: Test todo"
     assert message["From"] == "from@example.com"
@@ -37,8 +34,14 @@ async def test_email_sender_sends_todo_notification(monkeypatch, caplog):
 
 @pytest.mark.asyncio
 async def test_email_sender_logs_smtp_errors_and_reraises(monkeypatch, caplog):
-    send = AsyncMock(side_effect=email_module.aiosmtplib.SMTPException("SMTP unavailable"))
-    monkeypatch.setattr("app.core.email.aiosmtplib.send", send)
+    client = MagicMock()
+    client.is_connected = False
+    client.connect = AsyncMock()
+    client.send_message = AsyncMock(
+        side_effect=email_module.aiosmtplib.SMTPException("SMTP unavailable")
+    )
+    client.close = MagicMock()
+    monkeypatch.setattr("app.core.email.aiosmtplib.SMTP", MagicMock(return_value=client))
     caplog.set_level(logging.ERROR, logger="app.core.email")
 
     with pytest.raises(
@@ -46,11 +49,30 @@ async def test_email_sender_logs_smtp_errors_and_reraises(monkeypatch, caplog):
     ):
         await EmailSender(
             "mailhog", 1025, "from@example.com"
-        ).send_todo_created_notification(
-            42, "Test todo", "to@example.com"
-        )
+        ).send_todo_created_notification(42, "Test todo", "to@example.com")
 
+    client.close.assert_called_once_with()
     assert "Failed to send todo creation email for todo_id=42" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_email_sender_reuses_connection_and_closes_it(monkeypatch):
+    client = MagicMock()
+    client.is_connected = False
+    client.connect = AsyncMock(side_effect=lambda: setattr(client, "is_connected", True))
+    client.send_message = AsyncMock()
+    client.quit = AsyncMock(side_effect=lambda: setattr(client, "is_connected", False))
+    client.close = MagicMock()
+    monkeypatch.setattr("app.core.email.aiosmtplib.SMTP", MagicMock(return_value=client))
+
+    sender = EmailSender("mailhog", 1025, "from@example.com")
+    await sender.send_todo_created_notification(1, "First", "to@example.com")
+    await sender.send_todo_created_notification(2, "Second", "to@example.com")
+    await sender.close()
+
+    client.connect.assert_awaited_once_with()
+    assert client.send_message.await_count == 2
+    client.quit.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio

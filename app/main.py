@@ -15,6 +15,7 @@ from app.core.api_versioning import (
 )
 from app.core.config import settings
 from app.core.database import get_db, engine, Base
+from app.core.email import email_sender
 from app.core.rate_limit import RedisRateLimitMiddleware
 from app.core.security import set_jwt_secret
 from app.domains.users.router import router as auth_router
@@ -57,7 +58,10 @@ async def lifespan(app: FastAPI):
         + "\n",
         encoding="utf-8",
     )
-    yield
+    try:
+        yield
+    finally:
+        await email_sender.close()
 
 
 async def health_check(db: AsyncSession = Depends(get_db)):

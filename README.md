@@ -230,7 +230,8 @@ the Todo has been saved. The local Compose stack uses MailHog as a dummy SMTP
 server, so no real email is sent. Configure `SMTP_FROM_EMAIL` and
 `TODO_NOTIFICATION_EMAIL` in `.env` if needed, then create a Todo through
 `POST /todos`. The API log records when the notification is queued and sent;
-SMTP delivery errors are logged with the Todo ID. View captured messages at
+SMTP delivery errors are logged with the Todo ID. The API reuses one SMTP
+connection for notifications and closes it during shutdown. View captured messages at
 `http://localhost:8025` (or the port configured by `MAILHOG_UI_PORT`).
 
 ## Receive live Todo updates
