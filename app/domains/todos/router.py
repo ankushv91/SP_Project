@@ -1,5 +1,6 @@
 import logging
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 
@@ -8,6 +9,7 @@ from app.core.config import settings
 from app.core.email import send_todo_created_email
 from app.domains.todos.schemas import TodoCreate, TodoUpdate, TodoResponse
 from app.domains.todos import service as todo_service
+from app.domains.todos.websocket import todo_connection_manager
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,13 @@ async def create_todo(
     db: AsyncSession = Depends(get_db),
 ):
     todo = await todo_service.create_todo(db, payload)
+    todo_response = TodoResponse.model_validate(todo)
+    await todo_connection_manager.broadcast(
+        {
+            "event": "todo_created",
+            "todo": todo_response.model_dump(mode="json"),
+        }
+    )
     background_tasks.add_task(
         send_todo_created_email,
         todo.id,
@@ -28,6 +37,18 @@ async def create_todo(
     )
     logger.info("Queued todo creation email notification for todo_id=%s", todo.id)
     return todo
+
+
+@router.websocket("/ws")
+async def todos_websocket(websocket: WebSocket):
+    await todo_connection_manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        todo_connection_manager.disconnect(websocket)
 
 @router.get("", response_model=List[TodoResponse])
 async def list_todos(

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.core import rate_limit
 from app.core.api_versioning import (
+    AcceptHeaderVersionMiddleware,
     NotAcceptableAPIRequest,
     parse_accept_version,
 )
@@ -20,6 +21,8 @@ from app.core.config import Settings, settings
 from app.core.database import Base, get_db
 from app.core.security import _get_secret_key, set_jwt_secret
 from app.domains.todos import router as todo_router
+from app.domains.todos.websocket import todo_connection_manager
+from starlette.websockets import WebSocketDisconnect
 
 main_module = importlib.import_module("app.main")
 
@@ -141,6 +144,119 @@ async def test_create_todo(client):
     assert todo["title"] == "Write tests"
     assert todo["description"] == "Cover CRUD operations"
     assert todo["is_completed"] is False
+
+
+@pytest.mark.asyncio
+async def test_create_todo_broadcasts_saved_todo(client, monkeypatch):
+    broadcast = AsyncMock()
+    monkeypatch.setattr(todo_connection_manager, "broadcast", broadcast)
+
+    response = await client.post(
+        "/todos",
+        json={"title": "Broadcast this", "description": "To connected clients"},
+    )
+
+    assert response.status_code == 201
+    broadcast.assert_awaited_once_with(
+        {"event": "todo_created", "todo": response.json()}
+    )
+
+
+@pytest.mark.asyncio
+async def test_todo_websocket_removes_disconnected_client():
+    class DisconnectedWebSocket:
+        accepted = False
+
+        async def accept(self):
+            self.accepted = True
+
+        async def receive_text(self):
+            raise WebSocketDisconnect()
+
+    websocket = DisconnectedWebSocket()
+    await todo_router.todos_websocket(websocket)
+
+    assert websocket.accepted
+    assert websocket not in todo_connection_manager.active_connections
+
+
+@pytest.mark.asyncio
+async def test_todo_websocket_broadcasts_to_all_and_drops_closed_connections(
+    monkeypatch,
+):
+    class ConnectedWebSocket:
+        def __init__(self):
+            self.messages = []
+
+        async def send_json(self, payload):
+            self.messages.append(payload)
+
+    class ClosedWebSocket:
+        async def send_json(self, payload):
+            raise RuntimeError("WebSocket is already closed")
+
+    first = ConnectedWebSocket()
+    second = ConnectedWebSocket()
+    closed = ClosedWebSocket()
+    monkeypatch.setattr(
+        todo_connection_manager,
+        "active_connections",
+        {first, second, closed},
+    )
+    payload = {"event": "todo_created", "todo": {"id": 1}}
+
+    await todo_connection_manager.broadcast(payload)
+
+    assert first.messages == [payload]
+    assert second.messages == [payload]
+    assert todo_connection_manager.active_connections == {first, second}
+
+
+@pytest.mark.asyncio
+async def test_websocket_requests_dispatch_to_selected_version():
+    dispatched = {}
+    sent_messages = []
+
+    async def versioned_app(scope, receive, send):
+        dispatched["scope"] = scope
+        await send({"type": "websocket.accept"})
+
+    middleware = AcceptHeaderVersionMiddleware(
+        versioned_app,
+        apps={"v1": versioned_app},
+        default_version="v1",
+    )
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(message):
+        sent_messages.append(message)
+
+    await middleware(
+        {
+            "type": "websocket",
+            "path": "/v1/todos/ws",
+            "raw_path": b"/v1/todos/ws",
+            "headers": [(b"accept", b"text/html")],
+            "root_path": "",
+            "state": {},
+        },
+        receive,
+        send,
+    )
+
+    assert dispatched["scope"]["path"] == "/todos/ws"
+    assert dispatched["scope"]["state"]["api_version"] == "v1"
+    assert sent_messages == [{"type": "websocket.accept"}]
+
+
+@pytest.mark.asyncio
+async def test_todo_client_page_is_available(client):
+    response = await client.get("/")
+
+    assert response.status_code == 200
+    assert "Live Todo updates" in response.text
 
 
 @pytest.mark.asyncio

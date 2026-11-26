@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Todo updates</title>
+    <style>
+      body { font: 1rem system-ui, sans-serif; margin: 2rem auto; max-width: 42rem; padding: 0 1rem; }
+      #status { color: #555; }
+      li { border-bottom: 1px solid #ddd; padding: .75rem 0; }
+    </style>
+  </head>
+  <body>
+    <h1>Live Todo updates</h1>
+    <p id="status">Connecting...</p>
+    <ul id="todos"></ul>
+    <script>
+      const status = document.querySelector("#status");
+      const todos = document.querySelector("#todos");
+      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(`${protocol}//${location.host}/todos/ws`);
+
+      socket.addEventListener("open", () => { status.textContent = "Connected"; });
+      socket.addEventListener("message", (message) => {
+        const update = JSON.parse(message.data);
+        if (update.event !== "todo_created") return;
+        const item = document.createElement("li");
+        item.textContent = `${update.todo.title}${update.todo.description ? ` - ${update.todo.description}` : ""}`;
+        todos.prepend(item);
+      });
+      socket.addEventListener("close", () => { status.textContent = "Disconnected"; });
+      socket.addEventListener("error", () => { status.textContent = "Connection error"; });
+    </script>
+  </body>
+</html>

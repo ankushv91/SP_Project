@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import boto3
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
+from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
@@ -20,6 +21,7 @@ from app.domains.users.router import router as auth_router
 from app.domains.todos.router import router as todo_router
 
 OPENAPI_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "openapi.json"
+TODO_CLIENT_PATH = Path(__file__).resolve().parent / "domains" / "todos" / "client.html"
 
 
 def fetch_jwt_secret() -> str:
@@ -97,6 +99,12 @@ def create_versioned_api(version: str) -> FastAPI:
         openapi_url=None,
     )
     versioned_app.add_middleware(RedisRateLimitMiddleware)
+    versioned_app.add_api_route(
+        "/",
+        lambda: FileResponse(TODO_CLIENT_PATH),
+        methods=["GET"],
+        include_in_schema=False,
+    )
     versioned_app.include_router(auth_router)
     versioned_app.include_router(todo_router)
     versioned_app.include_router(create_version_router(version))

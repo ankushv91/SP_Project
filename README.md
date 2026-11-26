@@ -233,6 +233,14 @@ server, so no real email is sent. Configure `SMTP_FROM_EMAIL` and
 SMTP delivery errors are logged with the Todo ID. View captured messages at
 `http://localhost:8025` (or the port configured by `MAILHOG_UI_PORT`).
 
+## Receive live Todo updates
+
+Open `http://localhost:8000/` to view the minimal live-updates client. It
+connects to the `/todos/ws` WebSocket endpoint and displays newly created Todos.
+Clients receive JSON messages shaped like
+`{"event":"todo_created","todo":{...}}` after a Todo has been saved. The
+versioned WebSocket path `/v1/todos/ws` is also available.
+
 Stop and remove the containers and network with:
 
 ```powershell

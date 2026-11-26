@@ -125,7 +125,7 @@ class AcceptHeaderVersionMiddleware:
     async def __call__(
         self, scope: Scope, receive: Receive, send: Send
     ) -> None:
-        if scope["type"] != "http":
+        if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
 
@@ -151,7 +151,9 @@ class AcceptHeaderVersionMiddleware:
                 )
                 return
 
-        if path_version is None:
+        if path_version is None and scope["type"] == "websocket":
+            version = self.default_version
+        elif path_version is None:
             accept_header = ", ".join(
                 value.decode("latin-1")
                 for name, value in scope.get("headers", [])
