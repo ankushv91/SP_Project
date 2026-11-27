@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import json
+import logging
 from pathlib import Path
 import boto3
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
@@ -20,6 +21,8 @@ from app.core.rate_limit import RedisRateLimitMiddleware
 from app.core.security import set_jwt_secret
 from app.domains.users.router import router as auth_router
 from app.domains.todos.router import router as todo_router
+
+logger = logging.getLogger(__name__)
 
 OPENAPI_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "openapi.json"
 TODO_CLIENT_PATH = Path(__file__).resolve().parent / "domains" / "todos" / "client.html"
@@ -64,7 +67,7 @@ async def lifespan(app: FastAPI):
         await email_sender.close()
 
 
-async def health_check(db: AsyncSession = Depends(get_db)):
+async def health_check(db: AsyncSession = Depends(get_db)) -> dict[str, str]:
     try:
         await db.execute(text("SELECT 1"))
         return {
@@ -73,6 +76,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
             "environment": settings.ENVIRONMENT
         }
     except Exception as e:
+        logger.error("Health check failed: %s", e)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(e),

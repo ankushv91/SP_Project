@@ -647,7 +647,7 @@ async def test_builtin_api_documentation_routes_are_disabled(client):
 
 
 @pytest.mark.asyncio
-async def test_health_check_reports_database_errors(client):
+async def test_health_check_reports_database_errors(client, caplog):
     async def failing_get_db():
         class FailingSession:
             async def execute(self, query):
@@ -664,6 +664,7 @@ async def test_health_check_reports_database_errors(client):
 
     assert response.status_code == 503
     assert response.json() == {"detail": "database unavailable"}
+    assert "Health check failed: database unavailable" in caplog.text
 
 
 @pytest.mark.asyncio
