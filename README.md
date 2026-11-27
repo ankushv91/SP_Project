@@ -30,6 +30,63 @@ you can pull the image with
 `docker pull DOCKERHUB_USERNAME/sp-project:latest` (replace the placeholder
 with your Docker Hub username).
 
+## Deploy to AWS Elastic Beanstalk
+
+The root `Dockerfile` can be deployed to an Elastic Beanstalk Docker
+environment. The checked-in `.ebextensions/01-api.config` configures a
+load-balanced environment with `/health-check` as its load-balancer health
+check, a minimum of two and maximum of four instances, and
+`RollingWithAdditionalBatch` deployments. The extra batch keeps existing
+instances serving traffic while the new instance starts and passes its health
+check. Do not change this to a single-instance environment if zero-downtime
+deployments are required.
+
+Create or select a load-balanced Docker environment in the same AWS region as
+your database and JWT secret. In the Elastic Beanstalk console, open
+**Configuration → Updates, monitoring, and logging → Software → Edit →
+Environment properties**, and add:
+
+| Name | Value |
+| --- | --- |
+| `DATABASE_URL` | `postgresql+asyncpg://<user>:<URL-encoded-password>@<database-host>:5432/<database-name>` |
+| `REDIS_URL` | `redis://<redis-host>:6379/0` |
+| `AWS_REGION` | Region containing the JWT secret |
+| `AWS_SECRET_NAME` | Secrets Manager name containing the JWT signing key |
+
+Replace every placeholder with the values for your services. URL-encode
+reserved characters in the database username or password. These environment
+properties are deployment configuration: never commit real credentials to
+`.env.example`, source control, or deployment files. Restrict console access
+to authorized operators. The instance profile also needs
+`secretsmanager:GetSecretValue` permission for the JWT secret.
+
+To check health, open **EC2 → Target Groups** for the environment's load
+balancer and confirm the API targets are healthy. The same endpoint can be
+checked with `Invoke-RestMethod https://<environment-url>/health-check`; it
+returns HTTP 200 after it can query the configured database and HTTP 503 when
+that check fails.
+
+To verify a deployment without relying on a single post-deploy request, run
+this PowerShell loop in one terminal and deploy a new application version in
+another:
+
+```powershell
+while ($true) {
+    try {
+        $response = Invoke-RestMethod https://<environment-url>/health-check -TimeoutSec 5
+        "{0:u} {1}" -f (Get-Date), $response.status
+    } catch {
+        "{0:u} FAILED {1}" -f (Get-Date), $_.Exception.Message
+    }
+    Start-Sleep -Seconds 5
+}
+```
+
+Confirm the loop reports no failures during deployment and that the target
+group remains healthy as the new instance joins. This verification must be run
+against the deployed AWS environment; repository tests alone cannot establish
+that a live deployment is interruption-free.
+
 ## Run the API, PostgreSQL, and Redis with Docker Compose
 
 Install Docker Desktop (or Docker Engine with the Compose plugin). If `.env`
