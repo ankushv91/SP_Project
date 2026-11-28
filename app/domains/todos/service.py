@@ -1,14 +1,23 @@
+import base64
+import binascii
 import json
 import logging
+from datetime import datetime
+from typing import Literal, Optional
+
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from redis.exceptions import RedisError
-from typing import List, Optional
 from pydantic import ValidationError
 
 from app.core.redis import get_redis_client
 from app.domains.todos.models import Todo
-from app.domains.todos.schemas import TodoCreate, TodoUpdate, TodoResponse
+from app.domains.todos.schemas import (
+    TodoCreate,
+    TodoUpdate,
+    TodoPageResponse,
+    TodoResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +26,43 @@ CACHE_KEY_TODOS = "todos:list"
 
 
 def _todo_list_cache_key(
-    skip: int, limit: int, completed: Optional[bool]
+    limit: int, cursor: Optional[str], completed: Optional[bool]
 ) -> str:
-    return f"{CACHE_KEY_TODOS}:{skip}:{limit}:{completed}"
+    return f"{CACHE_KEY_TODOS}:{limit}:{cursor}:{completed}"
+
+
+def _encode_todo_cursor(todo: Todo) -> str:
+    cursor_data = {
+        "created_at": todo.created_at.isoformat(),
+        "id": todo.id,
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(cursor_data, separators=(",", ":")).encode("utf-8")
+    )
+    return encoded.decode("ascii").rstrip("=")
+
+
+def _decode_todo_cursor(cursor: str) -> tuple[datetime, int]:
+    try:
+        padded_cursor = cursor + "=" * (-len(cursor) % 4)
+        decoded = base64.b64decode(
+            padded_cursor, altchars=b"-_", validate=True
+        )
+        cursor_data = json.loads(decoded)
+        created_at = datetime.fromisoformat(cursor_data["created_at"])
+        todo_id = cursor_data["id"]
+        if not isinstance(todo_id, int) or isinstance(todo_id, bool) or todo_id < 1:
+            raise ValueError("Cursor todo ID must be a positive integer")
+        return created_at, todo_id
+    except (
+        binascii.Error,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise ValueError("Invalid todo cursor") from exc
 
 
 async def invalidate_todos_cache() -> None:
@@ -36,12 +79,16 @@ async def invalidate_todos_cache() -> None:
 
 async def get_all_todos(
     db: AsyncSession,
-    skip: int = 0,
-    limit: int = 100,
-    completed: Optional[bool] = None
-) -> List[TodoResponse]:
+    limit: int = 50,
+    cursor: Optional[str] = None,
+    status: Optional[Literal["pending", "completed"]] = None,
+    completed: Optional[bool] = None,
+) -> TodoPageResponse:
     redis_client = get_redis_client()
-    cache_key = _todo_list_cache_key(skip, limit, completed)
+    completed_filter = (
+        status == "completed" if status is not None else completed
+    )
+    cache_key = _todo_list_cache_key(limit, cursor, completed_filter)
     try:
         cached_todos = await redis_client.get(cache_key)
     except RedisError:
@@ -50,31 +97,56 @@ async def get_all_todos(
 
     if cached_todos is not None:
         try:
-            return [
-                TodoResponse.model_validate(todo)
-                for todo in json.loads(cached_todos)
-            ]
+            return TodoPageResponse.model_validate_json(cached_todos)
         except (json.JSONDecodeError, TypeError, ValidationError):
             logger.warning("Discarding invalid cached todo list", exc_info=True)
             await invalidate_todos_cache()
 
-    query = select(Todo).offset(skip).limit(limit)
-    if completed is not None:
-        query = query.where(Todo.is_completed == completed)
+    query = select(Todo)
+    if completed_filter is not None:
+        query = query.where(Todo.is_completed == completed_filter)
+    if cursor is not None:
+        _, cursor_id = _decode_todo_cursor(cursor)
+        # Compare against the stored value to preserve SQLite timestamp precision.
+        cursor_created_at = (
+            select(Todo.created_at)
+            .where(Todo.id == cursor_id)
+            .scalar_subquery()
+        )
+        cursor_exists = select(Todo.id).where(Todo.id == cursor_id).exists()
+        query = query.where(
+            or_(
+                and_(
+                    cursor_exists,
+                    or_(
+                        Todo.created_at < cursor_created_at,
+                        and_(
+                            Todo.created_at == cursor_created_at,
+                            Todo.id < cursor_id,
+                        ),
+                    ),
+                ),
+                and_(~cursor_exists, Todo.id < cursor_id),
+            )
+        )
+    query = query.order_by(Todo.created_at.desc(), Todo.id.desc()).limit(limit + 1)
     result = await db.execute(query)
-    todos = [
-        TodoResponse.model_validate(todo)
-        for todo in result.scalars().all()
-    ]
+    todos = result.scalars().all()
+    has_more = len(todos) > limit
+    page_todos = todos[:limit]
+    page = TodoPageResponse(
+        items=[TodoResponse.model_validate(todo) for todo in page_todos],
+        next_cursor=_encode_todo_cursor(page_todos[-1]) if has_more else None,
+    )
     try:
         await redis_client.setex(
             cache_key,
             CACHE_TTL,
-            json.dumps([todo.model_dump(mode="json") for todo in todos]),
+            page.model_dump_json(),
         )
     except RedisError:
         logger.warning("Failed to write the todo list cache", exc_info=True)
-    return todos
+    return page
 
 async def get_todo_by_id(db: AsyncSession, todo_id: int) -> Optional[Todo]:
     result = await db.execute(select(Todo).where(Todo.id == todo_id))

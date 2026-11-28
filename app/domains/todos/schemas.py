@@ -56,3 +56,8 @@ class TodoResponse(TodoBase):
             ]
         },
     )
+
+
+class TodoPageResponse(BaseModel):
+    items: list[TodoResponse]
+    next_cursor: Optional[str] = None

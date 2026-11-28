@@ -291,23 +291,125 @@ async def test_list_todos_filters_and_paginates(client):
 
     listed = await client.get("/todos")
     assert listed.status_code == 200
-    assert {item["id"] for item in listed.json()} == {pending_id, completed_id}
+    assert {item["id"] for item in listed.json()["items"]} == {
+        pending_id,
+        completed_id,
+    }
     assert [
         item["id"]
         for item in (
             await client.get("/todos", params={"completed": True})
-        ).json()
+        ).json()["items"]
     ] == [completed_id]
     assert [
         item["id"]
         for item in (
             await client.get("/todos", params={"completed": False})
-        ).json()
+        ).json()["items"]
     ] == [pending_id]
-    assert len((await client.get("/todos", params={"limit": 1})).json()) == 1
-    assert len(
-        (await client.get("/todos", params={"skip": 1, "limit": 1})).json()
-    ) == 1
+    status_filtered = await client.get("/todos", params={"status": "completed"})
+    assert [item["id"] for item in status_filtered.json()["items"]] == [
+        completed_id
+    ]
+
+
+@pytest.mark.asyncio
+async def test_todo_cursor_pagination_returns_each_todo_once(client):
+    created_ids = []
+    for index in range(5):
+        response = await client.post("/todos", json={"title": f"Todo {index}"})
+        created_ids.append(response.json()["id"])
+
+    first_page = await client.get("/todos", params={"limit": 2})
+    assert first_page.status_code == 200
+    assert [item["id"] for item in first_page.json()["items"]] == created_ids[
+        -2:
+    ][::-1]
+    assert first_page.json()["next_cursor"]
+
+    second_page = await client.get(
+        "/todos",
+        params={"limit": 2, "cursor": first_page.json()["next_cursor"]},
+    )
+    assert [item["id"] for item in second_page.json()["items"]] == created_ids[
+        -4:-2
+    ][::-1]
+    assert second_page.json()["next_cursor"]
+
+    final_page = await client.get(
+        "/todos",
+        params={"limit": 2, "cursor": second_page.json()["next_cursor"]},
+    )
+    assert [item["id"] for item in final_page.json()["items"]] == created_ids[:1]
+    assert final_page.json()["next_cursor"] is None
+
+
+@pytest.mark.asyncio
+async def test_todo_cursor_pagination_continues_if_cursor_todo_was_deleted(client):
+    created_ids = []
+    for index in range(3):
+        response = await client.post("/todos", json={"title": f"Todo {index}"})
+        created_ids.append(response.json()["id"])
+
+    first_page = await client.get("/todos", params={"limit": 1})
+    cursor = first_page.json()["next_cursor"]
+    await client.delete(f"/todos/{first_page.json()['items'][0]['id']}")
+
+    next_page = await client.get(
+        "/todos", params={"limit": 1, "cursor": cursor}
+    )
+    assert [item["id"] for item in next_page.json()["items"]] == [
+        created_ids[-2]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_todo_cursor_pagination_filters_by_status(client):
+    for title, is_completed in (
+        ("Pending 1", False),
+        ("Completed 1", True),
+        ("Pending 2", False),
+        ("Completed 2", True),
+    ):
+        await client.post(
+            "/todos",
+            json={"title": title, "is_completed": is_completed},
+        )
+
+    first_page = await client.get(
+        "/todos", params={"limit": 1, "status": "completed"}
+    )
+    assert [item["title"] for item in first_page.json()["items"]] == [
+        "Completed 2"
+    ]
+
+    second_page = await client.get(
+        "/todos",
+        params={
+            "limit": 1,
+            "status": "completed",
+            "cursor": first_page.json()["next_cursor"],
+        },
+    )
+    assert [item["title"] for item in second_page.json()["items"]] == [
+        "Completed 1"
+    ]
+    assert second_page.json()["next_cursor"] is None
+
+
+@pytest.mark.asyncio
+async def test_todo_list_rejects_invalid_cursor_and_status(client):
+    invalid_cursor = await client.get("/todos", params={"cursor": "invalid"})
+    assert invalid_cursor.status_code == 400
+    assert invalid_cursor.json()["detail"] == "Invalid todo cursor"
+
+    invalid_status = await client.get("/todos", params={"status": "archived"})
+    assert invalid_status.status_code == 422
+
+    conflicting_filters = await client.get(
+        "/todos", params={"status": "completed", "completed": "false"}
+    )
+    assert conflicting_filters.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -326,15 +428,15 @@ async def test_todo_list_cache_reuses_results_and_invalidates_after_mutations(
 
     monkeypatch.setattr(AsyncSession, "execute", counted_execute)
 
-    assert (await client.get("/todos")).json() == []
+    assert (await client.get("/todos")).json()["items"] == []
     assert cache.values
-    assert (await client.get("/todos")).json() == []
+    assert (await client.get("/todos")).json()["items"] == []
     assert execute_count == 1
     assert list(cache.expirations.values()) == [60]
 
     created = await client.post("/todos", json={"title": "Cached todo"})
     todo_id = created.json()["id"]
-    assert (await client.get("/todos")).json()[0]["id"] == todo_id
+    assert (await client.get("/todos")).json()["items"][0]["id"] == todo_id
     assert execute_count == 2
 
     updated = await client.put(
@@ -343,7 +445,7 @@ async def test_todo_list_cache_reuses_results_and_invalidates_after_mutations(
     assert updated.status_code == 200
     assert execute_count == 3
     completed = await client.get("/todos", params={"completed": True})
-    assert [todo["id"] for todo in completed.json()] == [todo_id]
+    assert [todo["id"] for todo in completed.json()["items"]] == [todo_id]
     assert execute_count == 4
     assert (await client.get("/todos", params={"completed": True})).json() == (
         completed.json()
@@ -353,7 +455,7 @@ async def test_todo_list_cache_reuses_results_and_invalidates_after_mutations(
     deleted = await client.delete(f"/todos/{todo_id}")
     assert deleted.status_code == 204
     assert execute_count == 5
-    assert (await client.get("/todos")).json() == []
+    assert (await client.get("/todos")).json()["items"] == []
     assert execute_count == 6
 
 
@@ -515,7 +617,7 @@ async def test_url_prefix_routes_existing_api_endpoints(client):
     response = await client.get("/v2/todos")
 
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json() == {"items": [], "next_cursor": None}
     assert response.headers["X-API-Version"] == "v2"
 
 

@@ -1,13 +1,18 @@
 import logging
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Optional
+from typing import Literal, Optional
 
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.email import send_todo_created_email
-from app.domains.todos.schemas import TodoCreate, TodoUpdate, TodoResponse
+from app.domains.todos.schemas import (
+    TodoCreate,
+    TodoPageResponse,
+    TodoUpdate,
+    TodoResponse,
+)
 from app.domains.todos import service as todo_service
 from app.domains.todos.websocket import todo_connection_manager
 
@@ -50,16 +55,38 @@ async def todos_websocket(websocket: WebSocket):
     finally:
         todo_connection_manager.disconnect(websocket)
 
-@router.get("", response_model=List[TodoResponse])
+@router.get("", response_model=TodoPageResponse)
 async def list_todos(
-    skip: int = 0,
-    limit: int = 100,
+    limit: int = Query(default=50, ge=1, le=100),
+    cursor: Optional[str] = None,
+    status_filter: Optional[Literal["pending", "completed"]] = Query(
+        default=None, alias="status"
+    ),
     completed: Optional[bool] = None,
     db: AsyncSession = Depends(get_db)
 ):
-    return await todo_service.get_all_todos(
-        db, skip=skip, limit=limit, completed=completed
-    )
+    if (
+        status_filter is not None
+        and completed is not None
+        and (status_filter == "completed") != completed
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="status and completed filters conflict",
+        )
+    try:
+        return await todo_service.get_all_todos(
+            db,
+            limit=limit,
+            cursor=cursor,
+            status=status_filter,
+            completed=completed,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
 @router.get("/{todo_id}", response_model=TodoResponse)
 async def get_todo(todo_id: int, db: AsyncSession = Depends(get_db)):
